@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { ALL_MOD_FILES, downloadModProjectZip } from './data/allModFiles';
 import { SINS_SPECS } from './data/modTypes';
 import { SinsHudSimulator } from './components/SinsHudSimulator';
+import { CurseForgeShowcase } from './components/CurseForgeShowcase';
 import {
   Copy,
   Check,
@@ -15,10 +16,11 @@ import {
   Flame,
   Zap,
   ShieldCheck,
+  Sparkles,
 } from 'lucide-react';
 
 export default function App() {
-  const [activeView, setActiveView] = useState<'all-ordered' | 'explorer' | 'simulator'>('all-ordered');
+  const [activeView, setActiveView] = useState<'all-ordered' | 'explorer' | 'simulator' | 'curseforge'>('curseforge');
   const [selectedFileId, setSelectedFileId] = useState<string>(ALL_MOD_FILES[0].id);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -108,6 +110,15 @@ export default function App() {
         </a>
 
         <nav className="hidden md:flex items-center gap-6 text-sm font-medium text-slate-400">
+          <button
+            onClick={() => setActiveView('curseforge')}
+            className={`hover:text-amber-300 transition-colors whitespace-nowrap flex items-center gap-1.5 ${
+              activeView === 'curseforge' ? 'text-amber-400 font-semibold underline underline-offset-8' : 'text-amber-300/80'
+            }`}
+          >
+            <Sparkles className="w-3.5 h-3.5" />
+            CurseForge (Аватар + Описание)
+          </button>
           <button
             onClick={() => setActiveView('all-ordered')}
             className={`hover:text-slate-100 transition-colors whitespace-nowrap ${
@@ -210,7 +221,18 @@ export default function App() {
             </div>
 
             {/* Mode Switcher Segmented Controls */}
-            <div className="flex items-center gap-1 p-1 bg-slate-900 border border-slate-800 rounded-lg self-start lg:self-end">
+            <div className="flex flex-wrap items-center gap-1 p-1 bg-slate-900 border border-slate-800 rounded-lg self-start lg:self-end">
+              <button
+                onClick={() => setActiveView('curseforge')}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors flex items-center gap-1.5 whitespace-nowrap ${
+                  activeView === 'curseforge'
+                    ? 'bg-amber-500 text-slate-950 font-semibold'
+                    : 'text-amber-300 hover:text-slate-100'
+                }`}
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                CurseForge Кит (Фото + Описание)
+              </button>
               <button
                 onClick={() => setActiveView('all-ordered')}
                 className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors flex items-center gap-1.5 whitespace-nowrap ${
@@ -497,6 +519,9 @@ export default function App() {
             </div>
           </section>
         )}
+
+        {/* CurseForge Publishing Kit View */}
+        {activeView === 'curseforge' && <CurseForgeShowcase />}
 
         {/* Default View: All 4 Ordered Sections Without Truncation */}
         {activeView === 'all-ordered' && (
