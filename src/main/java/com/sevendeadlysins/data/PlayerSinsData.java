@@ -14,12 +14,12 @@ import java.util.UUID;
 /**
  * Хранилище прогресса и состояния Семи Смертных Грехов игрока для Minecraft 1.20.1 (Java 17).
  *
- * ОПТИМИЗАЦИЯ ПОД CISCO'S FANTASY MEDIEVAL RPG [DRAGONFYRE]:
- * - Использует флаг dirty (isDirty / clearDirty), чтобы отправлять сетевые пакеты синхронизации
- *   только при реальном изменении данных, снижая нагрузку на сеть и TPS более чем на 90%.
- * - Хранит dragonfyreSoulRank (Ранг Души Dragonfyre), растущий от поглощения душ драконов Ice & Fire,
- *   боссов Cataclysm и адаптивных мобов L2Hostility.
- * - Строго совместимо с Java 17 (использует Mth.clamp и list.remove(0) вместо методов Java 21).
+ * ОБНОВЛЕНИЯ ПОД CISCO'S FANTASY MEDIEVAL RPG [DRAGONFYRE]:
+ * - Поле sinOverdriveUntil: режим «Метка Демона / Первородный Грех» (Shift + V), дающий x1.5 ко всем
+ *   эффектам, -50% расход маны и Адское Пламя (Hellblaze), блокирующее регенерацию боссов.
+ * - Каталог Алчности (observedArtifacts): хранит точное количество предметов в стаке (например, 13 шт.)
+ *   и поддерживает удаление любого сохранённого предмета (removeObservedArtifact) или полную очистку.
+ * - Строго совместимо с Java 17 (Mth.clamp, remove(0)).
  */
 public class PlayerSinsData implements INBTSerializable<CompoundTag> {
 
@@ -32,10 +32,13 @@ public class PlayerSinsData implements INBTSerializable<CompoundTag> {
     // Прогрессия под эндгейм Cisco's RPG [Dragonfyre]
     private int dragonfyreSoulRank = 0;
 
+    // Ультимативный режим «Метка Демона / Первородный Грех» (Shift + V)
+    private long sinOverdriveUntil = 0L;
+
     // Кулдауны и таймеры состояний
     private long prideCooldownUntil = 0L;   // Кулдаун Гордыни
-    private long prideActiveUntil = 0L;     // Длительность закона мира Гордыни: 900 тиков (45 сек)
-    private int activePrideLaw = -1;        // 0: Time Stop, 1: Gravity Collapse, 2: Solar Zenith
+    private long prideActiveUntil = 0L;     // Таймер Закона 0 Гордыни (Остановка времени на 20 секунд = 400 тиков)
+    private int activePrideLaw = -1;        // 0: Time Stop (20с), 1: Очищение эффектов по взгляду, 2: Мгновенная Смерть по взгляду
 
     private float wrathStacks = 0.0F;       // 0.0F - 100.0F
     private long wrathBerserkUntil = 0L;    // Режим Берсерка при достижении 100% стаков
@@ -44,10 +47,10 @@ public class PlayerSinsData implements INBTSerializable<CompoundTag> {
     private long slothBuffUntil = 0L;       // Окно 5x усиления после окончания сна Лени
     private int slothStillTicks = 0;        // Счетчик неподвижности для Покоя
 
-    // Каталог Алчности (максимум 20 сериализованных предметов/блоков со всеми аффиксами Apotheosis и чарами)
+    // Каталог Алчности (максимум 20 сериализованных стаков со всеми чарами Apotheosis и точным количеством Count)
     private final List<CompoundTag> observedArtifacts = new ArrayList<>();
 
-    // Арсенал украденных способностей Зависти (ваша личная коллекция навыков из ваниллы и модов Cisco's RPG)
+    // Арсенал украденных способностей Зависти
     private final List<String> stolenAbilities = new ArrayList<>();
     private String stolenAbilityId = "";
 
@@ -80,6 +83,7 @@ public class PlayerSinsData implements INBTSerializable<CompoundTag> {
         tag.putInt("activeSinIndex", this.activeSinIndex);
         tag.putInt("activeSubMode", this.activeSubMode);
         tag.putInt("dragonfyreSoulRank", this.dragonfyreSoulRank);
+        tag.putLong("sinOverdriveUntil", this.sinOverdriveUntil);
 
         tag.putLong("prideCooldownUntil", this.prideCooldownUntil);
         tag.putLong("prideActiveUntil", this.prideActiveUntil);
@@ -119,6 +123,7 @@ public class PlayerSinsData implements INBTSerializable<CompoundTag> {
         this.activeSinIndex = Mth.clamp(tag.getInt("activeSinIndex"), 0, 6);
         this.activeSubMode = Math.max(0, tag.getInt("activeSubMode"));
         this.dragonfyreSoulRank = Math.max(0, tag.getInt("dragonfyreSoulRank"));
+        this.sinOverdriveUntil = tag.getLong("sinOverdriveUntil");
 
         this.prideCooldownUntil = tag.getLong("prideCooldownUntil");
         this.prideActiveUntil = tag.getLong("prideActiveUntil");
@@ -208,6 +213,11 @@ public class PlayerSinsData implements INBTSerializable<CompoundTag> {
         return true;
     }
 
+    public boolean consumeManaWithOverdrive(float baseCost, long gameTime) {
+        float actualCost = isSinOverdriveActive(gameTime) ? (baseCost * 0.5F) : baseCost;
+        return consumeMana(actualCost);
+    }
+
     public float getMaxMana() {
         return maxMana;
     }
@@ -233,6 +243,21 @@ public class PlayerSinsData implements INBTSerializable<CompoundTag> {
             this.dragonfyreSoulRank = val;
             markDirty();
         }
+    }
+
+    public long getSinOverdriveUntil() {
+        return sinOverdriveUntil;
+    }
+
+    public void setSinOverdriveUntil(long sinOverdriveUntil) {
+        if (this.sinOverdriveUntil != sinOverdriveUntil) {
+            this.sinOverdriveUntil = sinOverdriveUntil;
+            markDirty();
+        }
+    }
+
+    public boolean isSinOverdriveActive(long gameTime) {
+        return gameTime > 0L && gameTime < this.sinOverdriveUntil;
     }
 
     public int getActiveSinIndex() {
@@ -264,16 +289,16 @@ public class PlayerSinsData implements INBTSerializable<CompoundTag> {
         int maxModes;
         switch (this.activeSinIndex) {
             case 0:
-                maxModes = 3; // Pride: 3 закона мира
+                maxModes = 3; // Pride: 0 Тайм Стоп (20с), 1 Очищение эффектов, 2 Мгновенная смерть
                 break;
             case 1:
-                maxModes = 2; // Greed: Копирование блока/экипировки / Каталог
+                maxModes = 2; // Greed: 0 Копирование стака в руке/блока/экипировки, 1 Каталог (с удалением)
                 break;
             case 3:
-                maxModes = 3; // Envy: Кража / Активация навыка / Меню Арсенала Зависти
+                maxModes = 3; // Envy: 0 Кража, 1 Активация навыка, 2 Меню Арсенала Зависти
                 break;
             case 6:
-                maxModes = 2; // Sloth: Бурст / Покой
+                maxModes = 2; // Sloth: 0 Бурст, 1 Покой
                 break;
             default:
                 maxModes = 1;
@@ -363,10 +388,29 @@ public class PlayerSinsData implements INBTSerializable<CompoundTag> {
         return observedArtifacts;
     }
 
+    /**
+     * Добавляет предмет или обновляет количество в стаке (например, 13 штук),
+     * если предмет с таким же ID и NBT-тегами уже есть в каталоге Алчности.
+     */
     public boolean addObservedArtifact(CompoundTag itemNbt) {
         if (itemNbt == null || itemNbt.isEmpty()) return false;
-        for (CompoundTag existing : this.observedArtifacts) {
-            if (existing.equals(itemNbt)) {
+        String newId = itemNbt.getString("id");
+        CompoundTag newTag = itemNbt.contains("tag", Tag.TAG_COMPOUND) ? itemNbt.getCompound("tag") : null;
+        byte newCount = itemNbt.getByte("Count");
+
+        for (int i = 0; i < this.observedArtifacts.size(); i++) {
+            CompoundTag existing = this.observedArtifacts.get(i);
+            String existingId = existing.getString("id");
+            CompoundTag existingTag = existing.contains("tag", Tag.TAG_COMPOUND) ? existing.getCompound("tag") : null;
+
+            boolean sameId = newId.equals(existingId);
+            boolean sameNbt = (newTag == null && existingTag == null) || (newTag != null && newTag.equals(existingTag));
+            if (sameId && sameNbt) {
+                if (existing.getByte("Count") != newCount) {
+                    existing.putByte("Count", newCount);
+                    markDirty();
+                    return true;
+                }
                 return false;
             }
         }
@@ -376,6 +420,28 @@ public class PlayerSinsData implements INBTSerializable<CompoundTag> {
         this.observedArtifacts.add(itemNbt.copy());
         markDirty();
         return true;
+    }
+
+    /**
+     * Удаляет сохранённый предмет из Каталога Алчности по индексу.
+     */
+    public boolean removeObservedArtifact(int index) {
+        if (index >= 0 && index < this.observedArtifacts.size()) {
+            this.observedArtifacts.remove(index);
+            markDirty();
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Полностью очищает Каталог Алчности.
+     */
+    public void clearObservedArtifacts() {
+        if (!this.observedArtifacts.isEmpty()) {
+            this.observedArtifacts.clear();
+            markDirty();
+        }
     }
 
     public List<String> getStolenAbilities() {
@@ -428,7 +494,8 @@ public class PlayerSinsData implements INBTSerializable<CompoundTag> {
     }
 
     /**
-     * Итоговый множитель урона с учётом Ранга Души Dragonfyre, Берсерка Гнева и Пробуждения Лени.
+     * Итоговый множитель урона с учётом Ранга Души Dragonfyre, Берсерка Гнева,
+     * Пробуждения Лени и режима Первородного Греха (Метки Демона x1.5).
      */
     public float getDamageMultiplier(long gameTime) {
         float mult = 1.0F + (this.dragonfyreSoulRank * 0.08F);
@@ -437,6 +504,9 @@ public class PlayerSinsData implements INBTSerializable<CompoundTag> {
         }
         if (gameTime < this.wrathBerserkUntil) {
             mult *= 3.0F;
+        }
+        if (isSinOverdriveActive(gameTime)) {
+            mult *= 1.5F;
         }
         return mult;
     }

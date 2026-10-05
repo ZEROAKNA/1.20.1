@@ -35,13 +35,11 @@ import java.util.UUID;
  * Модуль глубокой оптимизации и интеграции с модпаком
  * Cisco's Fantasy Medieval RPG [Dragonfyre] (Minecraft 1.20.1 / Forge 47.3.0).
  *
- * Поддерживаемые моды сборки Dragonfyre:
- * 1. Iron's Spells 'n Spellbooks (irons_spellbooks) — Spell Power, Max Mana, Cooldown Reduction, сброс КД.
- * 2. Apotheosis / Apothic Attributes (apotheosis / attributeslib) — Crit Chance, Crit Damage, Life Steal, Armor Shred, Overheal.
- * 3. Ice and Fire: Dragons (iceandfire) — кража Огненного, Ледяного и Грозового Дыхания Драконов и Взгляда Горгоны.
- * 4. L_Ender's Cataclysm (cataclysm) — кража способностей Игниса, Маледиктуса, Предвестника, Левиафана и Незеритового Монстра.
- * 5. Simply Swords & Cisco's RPG (simplyswords / ciscos_rpg) — кража оружейных техник мифических клинков.
- * 6. L2 Hostility & Champions (l2hostility / champions) — гибридный % урон от макс. HP и снятие адаптивных щитов мобов.
+ * ОБНОВЛЕНИЯ:
+ * 1. Пробитие лимита урона боссов (Boss Damage Cap Bypass) и трейтов L2Hostility (Adaptive, Reflect, Undying):
+ *    Метод dealMultiPhaseDamage(...) наносит многофазный каскадный урон (обнуляя invulnerableTime между фазами
+ *    и добавляя чистый урон fellOutOfWorld) + срывает щиты и регенерацию L2Hostility.
+ * 2. Поддержка Ультимативного Режима «Метка Демона / Первородный Грех» (Sin Overdrive x1.5).
  */
 public class CompatManager {
 
@@ -86,24 +84,71 @@ public class CompatManager {
     }
 
     /**
-     * Вычисляет гибридный урон для баланса Cisco's Fantasy Medieval RPG [Dragonfyre]:
-     * Комбинирует базовый урон навыка + скейлинг от атрибута атаки игрока + процент от макс. HP цели,
-     * чтобы навыки были полезны как в начале игры, так и против боссов Cataclysm / драконов Ice & Fire с 2000+ HP.
+     * Вычисляет гибридный урон для баланса Cisco's Fantasy Medieval RPG [Dragonfyre].
      */
     public static float calculateDragonfyreDamage(ServerPlayer caster, LivingEntity target, float baseDamage, float targetMaxHpPct, float sinMultiplier) {
         double playerAtk = caster.getAttributeValue(Attributes.ATTACK_DAMAGE);
         float weaponScaled = baseDamage + (float) (playerAtk * 1.35D);
-        float maxHpBonus = Math.min(250.0F, target.getMaxHealth() * targetMaxHpPct);
-        return (weaponScaled + maxHpBonus) * sinMultiplier;
+        float maxHpBonus = Math.min(350.0F, target.getMaxHealth() * targetMaxHpPct);
+        float vulnerabilityMult = target.getPersistentData().getLong("sds_lust_nightmare_until") > caster.level().getGameTime() ? 1.45F : 1.0F;
+        return (weaponScaled + maxHpBonus) * sinMultiplier * vulnerabilityMult;
+    }
+
+    /**
+     * ПРОБИТИЕ ЛИМИТА УРОНА БОССОВ (BOSS DAMAGE CAP BYPASS) И ТРЕЙТОВ L2HOSTILITY:
+     * 1. Снимает адаптивные щиты, баффы регенерации, сопротивления и поглощения у элитных мобов L2Hostility.
+     * 2. Разбивает высокий урон на несколько мгновенных микро-фаз с обнулением invulnerableTime = 0
+     *    и чередованием физических, магических и пустотных (fellOutOfWorld) источников урона,
+     *    чтобы обходить жесткий Damage Cap боссов Cataclysm и трейти Adaptive/Reflect/Undying!
+     */
+    public static void dealMultiPhaseDamage(ServerPlayer caster, LivingEntity target, float totalDamage, int phases) {
+        if (target == null || !target.isAlive() || target == caster) return;
+        ServerLevel level = caster.serverLevel();
+
+        // 1. Подавление трейтов L2Hostility (Reflect / Undying / Adaptive / Regenerating)
+        suppressL2HostilityTraits(target);
+
+        int safePhases = Math.max(2, Math.min(phases, 6));
+        float perPhaseDmg = totalDamage / safePhases;
+
+        for (int i = 0; i < safePhases; i++) {
+            if (!target.isAlive()) break;
+            target.invulnerableTime = 0;
+            if (i % 3 == 0) {
+                target.hurt(level.damageSources().playerAttack(caster), perPhaseDmg);
+            } else if (i % 3 == 1) {
+                target.hurt(level.damageSources().magic(), perPhaseDmg);
+            } else {
+                target.hurt(level.damageSources().fellOutOfWorld(), perPhaseDmg);
+            }
+        }
+        target.invulnerableTime = 0;
+    }
+
+    /**
+     * Снимает защитные эффекты, щиты поглощения и подавляет трейты L2Hostility (Undying / Adaptive / Reflect).
+     */
+    public static void suppressL2HostilityTraits(LivingEntity target) {
+        if (target == null) return;
+        target.setAbsorptionAmount(0.0F);
+        target.removeEffect(MobEffects.DAMAGE_RESISTANCE);
+        target.removeEffect(MobEffects.REGENERATION);
+        target.removeEffect(MobEffects.FIRE_RESISTANCE);
+        target.removeEffect(MobEffects.ABSORPTION);
+
+        // Помечаем цель флагом подавления Reflect/Undying для обработчиков урона
+        target.getPersistentData().putLong("sds_l2_suppressed_until", target.level().getGameTime() + 200L);
     }
 
     /**
      * Динамическое масштабирование атрибутов Iron's Spells 'n Spellbooks и Apotheosis (AttributesLib)
-     * от стаков Гнева, режима Берсерка и Ранга Души Dragonfyre.
+     * от стаков Гнева, режима Берсерка, Ранга Души Dragonfyre и режима Первородного Греха (Overdrive).
      */
     public static void updateDragonfyreAttributes(ServerPlayer player, PlayerSinsData data, int wrathTiers, boolean berserk, boolean slothAwakened) {
+        long gameTime = player.level().getGameTime();
+        double overdriveMult = data.isSinOverdriveActive(gameTime) ? 1.5D : 1.0D;
         double soulRankBonus = data.getDragonfyreSoulRank() * 0.03D;
-        double spellBonus = wrathTiers * 0.12D + (berserk ? 0.75D : 0.0D) + (slothAwakened ? 1.0D : 0.0D) + soulRankBonus;
+        double spellBonus = (wrathTiers * 0.12D + (berserk ? 0.75D : 0.0D) + (slothAwakened ? 1.0D : 0.0D) + soulRankBonus) * overdriveMult;
 
         if (ironsLoaded) {
             applyDynamicAttribute(
@@ -125,10 +170,10 @@ public class CompatManager {
         }
 
         if (attributesLibLoaded) {
-            double critChance = wrathTiers * 0.04D + (berserk ? 0.25D : 0.0D);
-            double critDamage = wrathTiers * 0.12D + (berserk ? 0.60D : 0.0D);
-            double armorShred = wrathTiers * 0.05D + (berserk ? 0.35D : 0.0D);
-            double lifeSteal = (berserk ? 0.20D : wrathTiers * 0.02D);
+            double critChance = (wrathTiers * 0.04D + (berserk ? 0.25D : 0.0D)) * overdriveMult;
+            double critDamage = (wrathTiers * 0.12D + (berserk ? 0.60D : 0.0D)) * overdriveMult;
+            double armorShred = (wrathTiers * 0.05D + (berserk ? 0.35D : 0.0D)) * overdriveMult;
+            double lifeSteal = (berserk ? 0.20D : wrathTiers * 0.02D) * overdriveMult;
 
             applyDynamicAttribute(
                     player,
@@ -179,7 +224,7 @@ public class CompatManager {
             if (instance != null) {
                 AttributeModifier existing = instance.getModifier(modifierUuid);
                 if (existing != null && Math.abs(existing.getAmount() - bonus) < 0.001D) {
-                    return; // Оптимизация TPS: не пересоздаём модификатор, если значение не изменилось
+                    return;
                 }
                 instance.removeModifier(modifierUuid);
                 if (bonus > 0.001D) {
@@ -201,7 +246,6 @@ public class CompatManager {
             Method getPlayerMagicData = magicDataClass.getMethod("getPlayerMagicData", LivingEntity.class);
             Object magicData = getPlayerMagicData.invoke(null, player);
             if (magicData != null) {
-                // Восстанавливаем ману Iron's Spells
                 try {
                     Method setMana = magicDataClass.getMethod("setMana", float.class);
                     setMana.invoke(magicData, 1000.0F);
@@ -238,24 +282,16 @@ public class CompatManager {
     public static void onGreedItemReplicated(ServerPlayer player, ItemStack copiedStack) {
         ResourceLocation itemId = ForgeRegistries.ITEMS.getKey(copiedStack.getItem());
         if (itemId != null && !("minecraft".equals(itemId.getNamespace()))) {
-            SevenDeadlySinsMod.LOGGER.debug("[Dragonfyre Greed] Скопирован RPG-артефакт со всеми NBT-тегами Apotheosis/чарами: {}", itemId);
+            SevenDeadlySinsMod.LOGGER.debug("[Dragonfyre Greed] Скопирован RPG-артефакт x{} со всеми NBT-тегами Apotheosis/чарами: {}", copiedStack.getCount(), itemId);
         }
     }
 
-    /**
-     * Позволяет Зависти (Envy) красть уникальные способности из модов сборки Cisco's Fantasy Medieval RPG [Dragonfyre]:
-     * - Драконы и мифические чудовища Ice and Fire (Огненное, Ледяное, Грозовое дыхание Дракона, Взгляд Горгоны)
-     * - Боссы L_Ender's Cataclysm (Игнис, Маледиктус, Незеритовый Монстр, Предвестник, Левиафан, Древний Остаток)
-     * - Заклинатели Iron's Spells 'n Spellbooks (Король Мёртвых, Пиромант, Криомант, Архимаг)
-     * - Мифическое оружие Simply Swords & Cisco's RPG
-     * - Элитные мобы L2Hostility (очищает их регенерацию и крадёт адаптивный пробой)
-     */
     public static String tryStealModdedAbility(ServerPlayer player, LivingEntity target, PlayerSinsData data) {
         ResourceLocation entityKey = ForgeRegistries.ENTITY_TYPES.getKey(target.getType());
         String namespace = entityKey != null ? entityKey.getNamespace() : "minecraft";
         String path = entityKey != null ? entityKey.getPath() : "unknown";
 
-        // Очистка положительных баффов и регенерации у элитных мобов L2Hostility / Champions при краже Завистью
+        suppressL2HostilityTraits(target);
         List<MobEffectInstance> activeEffects = new ArrayList<>(target.getActiveEffects());
         for (MobEffectInstance eff : activeEffects) {
             if (eff.getEffect().isBeneficial()) {
@@ -298,7 +334,7 @@ public class CompatManager {
             return cataclysmSkill;
         }
 
-        // 3. Проверка оружия в руке цели (Simply Swords, Iron's Spells, Cisco's RPG, Apotheosis)
+        // 3. Проверка оружия в руке цели
         ItemStack held = target.getMainHandItem();
         if (!held.isEmpty()) {
             ResourceLocation itemKey = ForgeRegistries.ITEMS.getKey(held.getItem());
@@ -316,7 +352,7 @@ public class CompatManager {
             return spellSkill;
         }
 
-        // 5. Tensura / L2Hostility / Любой другой мод из сборки Cisco's RPG
+        // 5. Tensura / L2Hostility / Любой другой мод
         if (TENSURA_ID.equals(namespace) || target.getPersistentData().contains("tensura:race")) {
             String race = target.getPersistentData().getString("tensura:race");
             if (race.isEmpty()) race = path;
@@ -334,15 +370,13 @@ public class CompatManager {
         return "";
     }
 
-    /**
-     * Исполняет похищенную способность из модов сборки Cisco's Fantasy Medieval RPG [Dragonfyre].
-     */
     public static boolean executeModdedAbility(ServerPlayer player, PlayerSinsData data, ServerLevel level, String abilityId, float damageMult) {
         if (abilityId == null || abilityId.isEmpty()) return false;
+        long gameTime = level.getGameTime();
 
         // 1. Дыхание Драконов Ice and Fire [Dragonfyre]
         if (abilityId.startsWith("dragonfyre:")) {
-            if (!data.consumeMana(24.0F)) return true;
+            if (!data.consumeManaWithOverdrive(24.0F, gameTime)) return true;
 
             Vec3 eye = player.getEyePosition();
             Vec3 look = player.getLookAngle().normalize();
@@ -367,7 +401,7 @@ public class CompatManager {
 
                 for (LivingEntity victim : level.getEntitiesOfClass(LivingEntity.class, new AABB(pt, pt).inflate(2.5D), e -> e != player && e.isAlive())) {
                     float dmg = calculateDragonfyreDamage(player, victim, 65.0F, 0.08F, damageMult);
-                    victim.hurt(level.damageSources().dragonBreath(), dmg);
+                    dealMultiPhaseDamage(player, victim, dmg, 4);
 
                     if (isIce) {
                         victim.setTicksFrozen(300);
@@ -388,7 +422,7 @@ public class CompatManager {
                 }
             }
             player.displayClientMessage(
-                    Component.literal("Зависть [Dragonfyre]: Обрушено Дыхание Дракона «" + abilityId + "» (% от Макс. HP + Пробой брони)!")
+                    Component.literal("Зависть [Dragonfyre]: Обрушено Дыхание Дракона «" + abilityId + "» (Пробитие Damage Cap)!")
                             .withStyle(ChatFormatting.GOLD, ChatFormatting.BOLD),
                     true
             );
@@ -397,7 +431,7 @@ public class CompatManager {
 
         // 2. Способности Боссов L_Ender's Cataclysm
         if (abilityId.startsWith("cataclysm:")) {
-            if (!data.consumeMana(25.0F)) return true;
+            if (!data.consumeManaWithOverdrive(25.0F, gameTime)) return true;
 
             Vec3 center = player.position().add(player.getLookAngle().scale(5.0D));
             level.sendParticles(ParticleTypes.EXPLOSION_EMITTER, center.x, center.y + 0.5D, center.z, 3, 1.5D, 0.5D, 1.5D, 0.0D);
@@ -406,14 +440,14 @@ public class CompatManager {
 
             for (LivingEntity victim : level.getEntitiesOfClass(LivingEntity.class, new AABB(center, center).inflate(11.0D), e -> e != player && e.isAlive())) {
                 float dmg = calculateDragonfyreDamage(player, victim, 72.0F, 0.10F, damageMult);
-                victim.hurt(level.damageSources().magic(), dmg);
+                dealMultiPhaseDamage(player, victim, dmg, 5);
                 victim.setSecondsOnFire(10);
                 victim.addEffect(new MobEffectInstance(MobEffects.WITHER, 200, 2));
                 player.heal(Math.min(12.0F, dmg * 0.10F));
             }
             player.addEffect(new MobEffectInstance(MobEffects.DAMAGE_RESISTANCE, 300, 2, false, true, true));
             player.displayClientMessage(
-                    Component.literal("Зависть [Cataclysm]: Катаклизм Босса «" + abilityId.substring("cataclysm:".length()) + "» сокрушил врагов!")
+                    Component.literal("Зависть [Cataclysm]: Катаклизм Босса «" + abilityId.substring("cataclysm:".length()) + "» пробил защиту врагов!")
                             .withStyle(ChatFormatting.RED, ChatFormatting.BOLD),
                     true
             );
@@ -422,7 +456,7 @@ public class CompatManager {
 
         // 3. Заклинания Iron's Spells 'n Spellbooks
         if (abilityId.startsWith("irons_spell:") || abilityId.startsWith("mod_weapon:irons_spellbooks:")) {
-            if (!data.consumeMana(20.0F)) return true;
+            if (!data.consumeManaWithOverdrive(20.0F, gameTime)) return true;
             clearIronsSpellbooksCooldowns(player);
 
             Vec3 eye = player.getEyePosition();
@@ -434,7 +468,7 @@ public class CompatManager {
                 level.sendParticles(ParticleTypes.WITCH, pt.x, pt.y, pt.z, 3, 0.2D, 0.2D, 0.2D, 0.02D);
                 for (LivingEntity victim : level.getEntitiesOfClass(LivingEntity.class, new AABB(pt, pt).inflate(2.2D), e -> e != player && e.isAlive())) {
                     float dmg = calculateDragonfyreDamage(player, victim, 54.0F, 0.06F, damageMult);
-                    victim.hurt(level.damageSources().magic(), dmg);
+                    dealMultiPhaseDamage(player, victim, dmg, 4);
                     victim.setSecondsOnFire(6);
                 }
             }
@@ -448,12 +482,12 @@ public class CompatManager {
 
         // 4. Расовые способности Tensura
         if (abilityId.startsWith("tensura_racial:")) {
-            if (!data.consumeMana(20.0F)) return true;
+            if (!data.consumeManaWithOverdrive(20.0F, gameTime)) return true;
             level.playSound(null, player.blockPosition(), SoundEvents.WITHER_SPAWN, SoundSource.PLAYERS, 1.5F, 1.3F);
             level.sendParticles(ParticleTypes.DRAGON_BREATH, player.getX(), player.getY() + 1.0D, player.getZ(), 65, 3.0D, 1.5D, 3.0D, 0.08D);
             for (LivingEntity victim : level.getEntitiesOfClass(LivingEntity.class, player.getBoundingBox().inflate(14.0D), e -> e != player && e.isAlive())) {
                 float dmg = calculateDragonfyreDamage(player, victim, 58.0F, 0.07F, damageMult);
-                victim.hurt(level.damageSources().magic(), dmg);
+                dealMultiPhaseDamage(player, victim, dmg, 4);
                 victim.addEffect(new MobEffectInstance(MobEffects.MOVEMENT_SLOWDOWN, 200, 4, false, true));
                 victim.addEffect(new MobEffectInstance(MobEffects.WEAKNESS, 200, 3, false, true));
             }
@@ -469,7 +503,7 @@ public class CompatManager {
 
         // 5. Оружие Simply Swords, Cisco's RPG и навыки любых других модов
         if (abilityId.startsWith("mod_skill:") || abilityId.startsWith("mod_weapon:")) {
-            if (!data.consumeMana(22.0F)) return true;
+            if (!data.consumeManaWithOverdrive(22.0F, gameTime)) return true;
             String[] parts = abilityId.split(":");
             String modName = parts.length > 1 ? parts[1] : "mod";
             String skillName = parts.length > 2 ? parts[2] : abilityId;
@@ -482,7 +516,7 @@ public class CompatManager {
 
             for (LivingEntity victim : level.getEntitiesOfClass(LivingEntity.class, new AABB(strikeCenter, strikeCenter).inflate(10.0D), e -> e != player && e.isAlive())) {
                 float dmg = calculateDragonfyreDamage(player, victim, 62.0F, 0.07F, damageMult);
-                victim.hurt(level.damageSources().magic(), dmg);
+                dealMultiPhaseDamage(player, victim, dmg, 4);
                 victim.setSecondsOnFire(8);
                 LightningBolt bolt = EntityType.LIGHTNING_BOLT.create(level);
                 if (bolt != null) {

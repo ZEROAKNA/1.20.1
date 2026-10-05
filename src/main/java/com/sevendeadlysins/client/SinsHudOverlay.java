@@ -20,9 +20,9 @@ public class SinsHudOverlay implements IGuiOverlay {
     };
 
     private static final String[][] MODE_NAMES = {
-            {"Остановка Времени (56 бл.)", "Гравитационный Коллапс", "Солнечный Зенит"},
-            {"Копия Блока / Грабёж", "Каталог Артефактов"},
-            {"Массовое Очарование", "Массовое Очарование", "Массовое Очарование"},
+            {"Тайм Стоп (20с / Анти-Реген)", "Очищение Эффектов [Взгляд]", "Мгновенная Смерть [Взгляд]"},
+            {"Копия Стака в Руке / Блока", "Каталог Алчности [Удал.]"},
+            {"Кровавый Контракт (+300% HP)", "Кровавый Контракт (+300% HP)", "Кровавый Контракт (+300% HP)"},
             {"Кража Способности [Моды]", "Каст Украденного Навыка", "Арсенал Зависти [V]"},
             {"Воронка Бездны", "Воронка Бездны", "Воронка Бездны"},
             {"Катаклизм Гнева", "Катаклизм Гнева", "Катаклизм Гнева"},
@@ -76,7 +76,9 @@ public class SinsHudOverlay implements IGuiOverlay {
 
         long gameTime = mc.level != null ? mc.level.getGameTime() : 0L;
         StringBuilder status = new StringBuilder(String.format("Гнев: %.0f%%", data.getWrathStacks()));
-        if (gameTime > 0L && gameTime >= data.getSlothLockedUntil() && gameTime < data.getSlothBuffUntil()) {
+        if (data.isSinOverdriveActive(gameTime)) {
+            status.append(" | §4§lМЕТКА ДЕМОНА x1.5!");
+        } else if (gameTime > 0L && gameTime >= data.getSlothLockedUntil() && gameTime < data.getSlothBuffUntil()) {
             status.append(" | §bУдар 5.0x!");
         } else if (!data.getStolenAbilityId().isEmpty()) {
             status.append(" | ").append(data.getStolenAbilityId());

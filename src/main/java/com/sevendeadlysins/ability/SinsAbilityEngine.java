@@ -58,10 +58,17 @@ public class SinsAbilityEngine {
     private static final UUID WRATH_ATTACK_MODIFIER_UUID = UUID.fromString("d48f6011-7a91-43d1-98b2-112233445501");
     private static final UUID WRATH_SPEED_MODIFIER_UUID = UUID.fromString("d48f6011-7a91-43d1-98b2-112233445502");
     private static final UUID LUST_THRALL_DAMAGE_UUID = UUID.fromString("d48f6011-7a91-43d1-98b2-112233445503");
+    private static final UUID LUST_THRALL_HEALTH_UUID = UUID.fromString("d48f6011-7a91-43d1-98b2-112233445504");
 
     public static void executeActiveSin(ServerPlayer player, PlayerSinsData data, int sinId, int mode) {
         ServerLevel level = player.serverLevel();
         long gameTime = level.getGameTime();
+
+        // Специальный код -2: Ультимативный режим «Метка Демона / Первородный Грех» (Shift + V)
+        if (mode == -2) {
+            activateSinOverdrive(player, data, level, gameTime);
+            return;
+        }
 
         if (gameTime < data.getSlothLockedUntil()) {
             long remainingSec = (data.getSlothLockedUntil() - gameTime) / 20L;
@@ -78,10 +85,10 @@ public class SinsAbilityEngine {
                 executePride(player, data, level, gameTime, mode);
                 break;
             case 1:
-                executeGreed(player, data, level, mode);
+                executeGreed(player, data, level, gameTime, mode);
                 break;
             case 2:
-                executeLust(player, data, level);
+                executeLust(player, data, level, gameTime);
                 break;
             case 3:
                 executeEnvy(player, data, level, gameTime, mode);
@@ -101,12 +108,60 @@ public class SinsAbilityEngine {
     }
 
     /**
-     * 1. ГОРДЫНЯ (PRIDE) — БАЛАНС DRAGONFYRE 1.20.1
-     * - Закон 0 (ОСТАНОВКА ВРЕМЕНИ): Полностью замораживает врагов и летящие снаряды в радиусе 56 блоков.
-     *   Повторное нажатие [V] в любой момент досрочно снимает остановку времени!
-     * - Закон 1 (ГРАВИТАЦИОННЫЙ КОЛЛАПС): Подбрасывает всех врагов в радиусе 45 блоков и обрушивает их о землю
-     *   с гибридным уроном (85 + % от макс. HP босса) и ударом молнии.
-     * - Закон 2 (СОЛНЕЧНЫЙ ЗЕНИТ): Устанавливает полдень (6000L), даёт полную неуязвимость, Силу IV и солнечную ауру.
+     * УЛЬТИМАТИВНЫЙ РЕЖИМ «МЕТКА ДЕМОНА / ПЕРВОРОДНЫЙ ГРЕХ» (SIN OVERDRIVE — Shift + V)
+     * На 30 секунд (600 тиков) даёт x1.5 ко всем статам и урону, -50% расход маны и Адское Пламя (анти-реген боссов).
+     */
+    private static void activateSinOverdrive(ServerPlayer player, PlayerSinsData data, ServerLevel level, long gameTime) {
+        if (data.isSinOverdriveActive(gameTime)) {
+            long leftSec = (data.getSinOverdriveUntil() - gameTime) / 20L;
+            player.displayClientMessage(
+                    Component.literal("Метка Демона [Первородный Грех] уже активна! Осталось: " + leftSec + " сек.")
+                            .withStyle(ChatFormatting.DARK_RED, ChatFormatting.BOLD),
+                    true
+            );
+            return;
+        }
+
+        boolean hasCondition = data.getWrathStacks() >= 80.0F || data.getDragonfyreSoulRank() >= 2;
+        if (!hasCondition && !data.consumeMana(50.0F)) {
+            player.displayClientMessage(
+                    Component.literal("Для Метки Демона [Shift + V] требуется 80% Гнева, 2+ Ранг Души или 50 ед. маны!")
+                            .withStyle(ChatFormatting.RED),
+                    true
+            );
+            return;
+        }
+
+        data.setSinOverdriveUntil(gameTime + 600L);
+        data.setWrathStacks(100.0F);
+        data.setWrathBerserkUntil(gameTime + 600L);
+
+        player.addEffect(new MobEffectInstance(MobEffects.DAMAGE_BOOST, 600, 3, false, true, true));
+        player.addEffect(new MobEffectInstance(MobEffects.MOVEMENT_SPEED, 600, 2, false, true, true));
+        player.addEffect(new MobEffectInstance(MobEffects.DAMAGE_RESISTANCE, 600, 2, false, true, true));
+        player.addEffect(new MobEffectInstance(MobEffects.FIRE_RESISTANCE, 600, 0, false, true, true));
+
+        updateWrathAttributes(player, data, gameTime);
+        CompatManager.clearIronsSpellbooksCooldowns(player);
+
+        level.sendParticles(ParticleTypes.SOUL_FIRE_FLAME, player.getX(), player.getY() + 1.0D, player.getZ(), 80, 1.5D, 1.2D, 1.5D, 0.1D);
+        level.sendParticles(ParticleTypes.SCULK_SOUL, player.getX(), player.getY() + 1.0D, player.getZ(), 45, 1.2D, 1.0D, 1.2D, 0.08D);
+        level.playSound(null, player.blockPosition(), SoundEvents.WARDEN_ROAR, SoundSource.PLAYERS, 2.0F, 0.65F);
+        level.playSound(null, player.blockPosition(), SoundEvents.TOTEM_USE, SoundSource.PLAYERS, 1.5F, 0.75F);
+
+        player.displayClientMessage(
+                Component.literal("✦ МЕТКА ДЕМОНА: ПЕРВОРОДНЫЙ ГРЕХ АКТИВИРОВАН НА 30 СЕК! (x1.5 Мощность, -50% Маны, Адское Пламя анти-регена) ✦")
+                        .withStyle(ChatFormatting.DARK_RED, ChatFormatting.BOLD),
+                true
+        );
+    }
+
+    /**
+     * 1. ГОРДЫНЯ (PRIDE) — ПЕРЕРАБОТАНО ПО ЗАПРОСУ:
+     * - Способность 1 (chosenLaw == 0): ТАЙМ СТОП НА 20 СЕКУНД (400 тиков). Все кроме игрока останавливаются,
+     *   никто не может двигаться, а регенерация у всех остановленных существ полностью заблокирована!
+     * - Способность 2 (chosenLaw == 1): Сразу очищает все эффекты у того, на кого смотрит игрок.
+     * - Способность 3 (chosenLaw == 2): МГНОВЕННАЯ СМЕРТЬ того, на кого смотрит игрок.
      */
     private static void executePride(ServerPlayer player, PlayerSinsData data, ServerLevel level, long gameTime, int lawMode) {
         int chosenLaw = Mth.clamp(lawMode, 0, 2);
@@ -114,7 +169,7 @@ public class SinsAbilityEngine {
         if (chosenLaw == 0 && data.getActivePrideLaw() == 0 && gameTime < data.getPrideActiveUntil()) {
             data.setActivePrideLaw(-1);
             data.setPrideActiveUntil(0L);
-            unfreezeTimeInArea(player, level, 72.0D);
+            unfreezeTimeInArea(player, level, 80.0D);
             level.playSound(null, player.blockPosition(), SoundEvents.BEACON_DEACTIVATE, SoundSource.PLAYERS, 2.0F, 1.2F);
             player.displayClientMessage(
                     Component.literal("Гордыня: Ход времени возобновлён!")
@@ -124,43 +179,55 @@ public class SinsAbilityEngine {
             return;
         }
 
-        if (gameTime < data.getPrideCooldownUntil()) {
-            long ticksLeft = data.getPrideCooldownUntil() - gameTime;
-            player.displayClientMessage(
-                    Component.literal("Гордыня восстанавливается: " + (ticksLeft / 20L) + " сек.")
-                            .withStyle(ChatFormatting.GOLD),
-                    true
-            );
-            return;
-        }
-
-        if (!data.consumeMana(35.0F)) {
-            player.displayClientMessage(Component.literal("Недостаточно маны (требуется 35).").withStyle(ChatFormatting.RED), true);
-            return;
-        }
-
-        data.setActivePrideLaw(chosenLaw);
-        data.setPrideActiveUntil(gameTime + 900L);
-        data.setPrideCooldownUntil(gameTime + 200L);
-
         if (chosenLaw == 0) {
-            AABB box = player.getBoundingBox().inflate(56.0D);
+            if (gameTime < data.getPrideCooldownUntil()) {
+                long ticksLeft = data.getPrideCooldownUntil() - gameTime;
+                player.displayClientMessage(
+                        Component.literal("Гордыня восстанавливается: " + (ticksLeft / 20L) + " сек.")
+                                .withStyle(ChatFormatting.GOLD),
+                        true
+                );
+                return;
+            }
+
+            if (!data.consumeManaWithOverdrive(35.0F, gameTime)) {
+                player.displayClientMessage(Component.literal("Недостаточно маны (требуется 35).").withStyle(ChatFormatting.RED), true);
+                return;
+            }
+
+            // Тайм Стоп строго на 20 секунд (400 тиков)
+            data.setActivePrideLaw(0);
+            data.setPrideActiveUntil(gameTime + 400L);
+            data.setPrideCooldownUntil(gameTime + 200L);
+
+            AABB box = player.getBoundingBox().inflate(64.0D);
             int frozenCount = 0;
-            for (Mob mob : level.getEntitiesOfClass(Mob.class, box)) {
-                if (mob.getPersistentData().hasUUID("sds_lust_master")
-                        && player.getUUID().equals(mob.getPersistentData().getUUID("sds_lust_master"))) {
+            for (LivingEntity entity : level.getEntitiesOfClass(LivingEntity.class, box, e -> e != player && e.isAlive())) {
+                if (entity.getPersistentData().hasUUID("sds_lust_master")
+                        && player.getUUID().equals(entity.getPersistentData().getUUID("sds_lust_master"))) {
                     continue;
                 }
-                mob.setNoAi(true);
-                mob.setNoGravity(true);
-                mob.setDeltaMovement(Vec3.ZERO);
-                mob.addEffect(new MobEffectInstance(MobEffects.GLOWING, 900, 0, false, false));
-                mob.getPersistentData().putBoolean("sds_time_stopped", true);
-                mob.getPersistentData().putDouble("sds_freeze_x", mob.getX());
-                mob.getPersistentData().putDouble("sds_freeze_y", mob.getY());
-                mob.getPersistentData().putDouble("sds_freeze_z", mob.getZ());
+                if (entity instanceof Mob mob) {
+                    mob.setNoAi(true);
+                    mob.setTarget(null);
+                    mob.getNavigation().stop();
+                }
+                entity.setNoGravity(true);
+                entity.setDeltaMovement(Vec3.ZERO);
+                entity.hurtMarked = true;
+
+                entity.removeEffect(MobEffects.REGENERATION);
+                entity.addEffect(new MobEffectInstance(MobEffects.MOVEMENT_SLOWDOWN, 400, 255, false, false));
+                entity.addEffect(new MobEffectInstance(MobEffects.GLOWING, 400, 0, false, false));
+
+                entity.getPersistentData().putBoolean("sds_time_stopped", true);
+                entity.getPersistentData().putDouble("sds_freeze_x", entity.getX());
+                entity.getPersistentData().putDouble("sds_freeze_y", entity.getY());
+                entity.getPersistentData().putDouble("sds_freeze_z", entity.getZ());
+                entity.getPersistentData().putFloat("sds_locked_hp", entity.getHealth());
                 frozenCount++;
             }
+
             for (Projectile proj : level.getEntitiesOfClass(Projectile.class, box)) {
                 proj.setNoGravity(true);
                 proj.setDeltaMovement(Vec3.ZERO);
@@ -169,64 +236,123 @@ public class SinsAbilityEngine {
                 proj.getPersistentData().putDouble("sds_freeze_y", proj.getY());
                 proj.getPersistentData().putDouble("sds_freeze_z", proj.getZ());
             }
-            level.sendParticles(ParticleTypes.END_ROD, player.getX(), player.getY() + 1.0D, player.getZ(), 65, 4.5D, 2.0D, 4.5D, 0.02D);
+
+            level.sendParticles(ParticleTypes.END_ROD, player.getX(), player.getY() + 1.0D, player.getZ(), 75, 5.0D, 2.0D, 5.0D, 0.02D);
             level.playSound(null, player.blockPosition(), SoundEvents.BEACON_ACTIVATE, SoundSource.PLAYERS, 2.0F, 0.5F);
             level.playSound(null, player.blockPosition(), SoundEvents.BELL_RESONATE, SoundSource.PLAYERS, 2.0F, 0.5F);
             player.displayClientMessage(
-                    Component.literal("Закон Гордыни: ОСТАНОВКА ВРЕМЕНИ! Заморожено целей: " + frozenCount + " (Повтор [V] — снять)")
+                    Component.literal("Гордыня [Способность 1]: ТАЙМ СТОП НА 20 СЕКУНД! Остановлено целей: " + frozenCount + " (Движение и Регенерация отключены!)")
                             .withStyle(ChatFormatting.GOLD, ChatFormatting.BOLD),
                     true
             );
-
-        } else if (chosenLaw == 1) {
-            AABB box = player.getBoundingBox().inflate(45.0D);
-            int lifted = 0;
-            for (LivingEntity target : level.getEntitiesOfClass(LivingEntity.class, box, e -> e != player && e.isAlive())) {
-                if (target.getPersistentData().hasUUID("sds_lust_master")
-                        && player.getUUID().equals(target.getPersistentData().getUUID("sds_lust_master"))) {
-                    continue;
-                }
-                target.setDeltaMovement(target.getDeltaMovement().x, 2.15D, target.getDeltaMovement().z);
-                target.hurtMarked = true;
-                target.addEffect(new MobEffectInstance(MobEffects.GLOWING, 60, 0, false, false));
-                target.getPersistentData().putLong("sds_gravity_slam_tick", gameTime + 35L);
-                lifted++;
-            }
-            level.sendParticles(ParticleTypes.PORTAL, player.getX(), player.getY() + 1.0D, player.getZ(), 75, 4.5D, 2.0D, 4.5D, 0.25D);
-            level.playSound(null, player.blockPosition(), SoundEvents.WARDEN_SONIC_CHARGE, SoundSource.PLAYERS, 2.0F, 0.6F);
-            player.displayClientMessage(
-                    Component.literal("Закон Гордыни: Гравитационный Коллапс! Поднято врагов: " + lifted + " (85 + 12% Max HP урона)")
-                            .withStyle(ChatFormatting.GOLD, ChatFormatting.BOLD),
-                    true
-            );
-
-        } else {
-            level.setDayTime(6000L);
-            level.setWeatherParameters(12000, 0, false, false);
-            player.addEffect(new MobEffectInstance(MobEffects.DAMAGE_BOOST, 900, 3, false, true, true));
-            player.addEffect(new MobEffectInstance(MobEffects.REGENERATION, 900, 2, false, true, true));
-            player.addEffect(new MobEffectInstance(MobEffects.FIRE_RESISTANCE, 900, 0, false, true, true));
-            player.addEffect(new MobEffectInstance(MobEffects.ABSORPTION, 900, 4, false, true, true));
-            level.sendParticles(ParticleTypes.FLAME, player.getX(), player.getY() + 1.0D, player.getZ(), 65, 2.2D, 1.2D, 2.2D, 0.1D);
-            level.playSound(null, player.blockPosition(), SoundEvents.TOTEM_USE, SoundSource.PLAYERS, 1.8F, 1.1F);
-            player.displayClientMessage(
-                    Component.literal("Закон Гордыни: Солнечный Зенит! (Полдень + Полная Неуязвимость + Выжигающая Аура)")
-                            .withStyle(ChatFormatting.GOLD, ChatFormatting.BOLD),
-                    true
-            );
+            return;
         }
+
+        // Способность 2 (chosenLaw == 1): Сразу очищает все эффекты того, на кого смотрит игрок
+        if (chosenLaw == 1) {
+            EntityHitResult hit = raycastEntity(player, 48.0D);
+            LivingEntity target = (hit != null && hit.getEntity() instanceof LivingEntity living) ? living : null;
+
+            if (target == null) {
+                player.displayClientMessage(
+                        Component.literal("Гордыня [Очищение]: Наведите прицел на цель (до 48 блоков)!")
+                                .withStyle(ChatFormatting.YELLOW),
+                        true
+                );
+                return;
+            }
+
+            if (!data.consumeManaWithOverdrive(20.0F, gameTime)) {
+                player.displayClientMessage(Component.literal("Недостаточно маны (требуется 20).").withStyle(ChatFormatting.RED), true);
+                return;
+            }
+
+            int removedEffectsCount = target.getActiveEffects().size();
+            target.removeAllEffects();
+            target.setAbsorptionAmount(0.0F);
+            target.clearFire();
+            CompatManager.suppressL2HostilityTraits(target);
+            target.getPersistentData().putLong("sds_no_regen_until", gameTime + 300L);
+            target.getPersistentData().putFloat("sds_locked_hp", target.getHealth());
+
+            level.sendParticles(ParticleTypes.ENCHANTED_HIT, target.getX(), target.getY() + 1.0D, target.getZ(), 45, 0.6D, 0.9D, 0.6D, 0.15D);
+            level.sendParticles(ParticleTypes.SCULK_SOUL, target.getX(), target.getY() + 1.0D, target.getZ(), 25, 0.5D, 0.8D, 0.5D, 0.06D);
+            level.playSound(null, target.blockPosition(), SoundEvents.TOTEM_USE, SoundSource.PLAYERS, 1.5F, 1.4F);
+
+            player.displayClientMessage(
+                    Component.literal("Гордыня [Способность 2]: С цели «" + target.getName().getString() + "» полностью стёрты ВСЕ эффекты (" + removedEffectsCount + " шт.), щиты и регенерация!")
+                            .withStyle(ChatFormatting.GOLD, ChatFormatting.BOLD),
+                    true
+            );
+            return;
+        }
+
+        // Способность 3 (chosenLaw == 2): МГНОВЕННАЯ СМЕРТЬ того, на кого смотрит игрок
+        EntityHitResult hit = raycastEntity(player, 48.0D);
+        LivingEntity target = (hit != null && hit.getEntity() instanceof LivingEntity living) ? living : null;
+
+        if (target == null) {
+            player.displayClientMessage(
+                    Component.literal("Гордыня [Приговор Смерти]: Наведите прицел на цель (до 48 блоков)!")
+                            .withStyle(ChatFormatting.RED),
+                    true
+            );
+            return;
+        }
+
+        if (!data.consumeManaWithOverdrive(50.0F, gameTime)) {
+            player.displayClientMessage(Component.literal("Недостаточно маны для Мгновенной Смерти (требуется 50).").withStyle(ChatFormatting.RED), true);
+            return;
+        }
+
+        data.setPrideCooldownUntil(gameTime + 100L);
+        String targetName = target.getName().getString();
+
+        target.removeAllEffects();
+        target.setAbsorptionAmount(0.0F);
+        CompatManager.suppressL2HostilityTraits(target);
+
+        for (EquipmentSlot slot : EquipmentSlot.values()) {
+            ItemStack eq = target.getItemBySlot(slot);
+            if (eq.is(Items.TOTEM_OF_UNDYING)) {
+                target.setItemSlot(slot, ItemStack.EMPTY);
+            }
+        }
+
+        target.invulnerableTime = 0;
+        CompatManager.dealMultiPhaseDamage(player, target, Math.max(1000000.0F, target.getMaxHealth() * 100.0F), 6);
+        if (target.isAlive()) {
+            target.setHealth(0.0F);
+            target.die(level.damageSources().fellOutOfWorld());
+            target.kill();
+        }
+
+        level.sendParticles(ParticleTypes.SONIC_BOOM, target.getX(), target.getY() + 1.0D, target.getZ(), 3, 0.2D, 0.2D, 0.2D, 0.0D);
+        level.sendParticles(ParticleTypes.SOUL_FIRE_FLAME, target.getX(), target.getY() + 1.0D, target.getZ(), 75, 0.9D, 1.2D, 0.9D, 0.12D);
+        level.playSound(null, target.blockPosition(), SoundEvents.WARDEN_SONIC_BOOM.value(), SoundSource.PLAYERS, 2.5F, 0.6F);
+        level.playSound(null, target.blockPosition(), SoundEvents.WITHER_DEATH, SoundSource.PLAYERS, 1.8F, 0.7F);
+
+        player.displayClientMessage(
+                Component.literal("Гордыня [Способность 3]: МГНОВЕННАЯ СМЕРТЬ! «" + targetName + "» уничтожен взглядом!")
+                        .withStyle(ChatFormatting.DARK_RED, ChatFormatting.BOLD),
+                true
+        );
     }
 
     public static void unfreezeTimeInArea(ServerPlayer player, ServerLevel level, double radius) {
         AABB box = player.getBoundingBox().inflate(radius);
-        for (Mob mob : level.getEntitiesOfClass(Mob.class, box)) {
-            if (mob.getPersistentData().getBoolean("sds_time_stopped")) {
-                mob.setNoAi(false);
-                mob.setNoGravity(false);
-                mob.getPersistentData().remove("sds_time_stopped");
-                mob.getPersistentData().remove("sds_freeze_x");
-                mob.getPersistentData().remove("sds_freeze_y");
-                mob.getPersistentData().remove("sds_freeze_z");
+        for (LivingEntity entity : level.getEntitiesOfClass(LivingEntity.class, box)) {
+            if (entity.getPersistentData().getBoolean("sds_time_stopped")) {
+                if (entity instanceof Mob mob) {
+                    mob.setNoAi(false);
+                }
+                entity.setNoGravity(false);
+                entity.removeEffect(MobEffects.MOVEMENT_SLOWDOWN);
+                entity.getPersistentData().remove("sds_time_stopped");
+                entity.getPersistentData().remove("sds_freeze_x");
+                entity.getPersistentData().remove("sds_freeze_y");
+                entity.getPersistentData().remove("sds_freeze_z");
+                entity.getPersistentData().remove("sds_locked_hp");
             }
         }
         for (Projectile proj : level.getEntitiesOfClass(Projectile.class, box)) {
@@ -241,11 +367,32 @@ public class SinsAbilityEngine {
     }
 
     /**
-     * 2. АЛЧНОСТЬ (GREED) — ПОДДЕРЖКА АФФИКСОВ APOTHEOSIS И БЛОКОВ 1.20.1
-     * Копирует блоки по взгляду прямо в инвентарь, сканирует экипировку боссов/мобов и сохраняет все
-     * NBT-аффиксы Apotheosis, сокеты самоцветов, свитки Iron's Spells и мифическое оружие Simply Swords.
+     * 2. АЛЧНОСТЬ (GREED) — КОПИРОВАНИЕ ПОЛНОГО СТАКА В РУКЕ (НАПР. 13 -> 13 ШТ.) И УДАЛЕНИЕ ИЗ КАТАЛОГА
      */
-    private static void executeGreed(ServerPlayer player, PlayerSinsData data, ServerLevel level, int mode) {
+    private static void executeGreed(ServerPlayer player, PlayerSinsData data, ServerLevel level, long gameTime, int mode) {
+        if (mode == 399) {
+            data.clearObservedArtifacts();
+            level.playSound(null, player.blockPosition(), SoundEvents.UI_BUTTON_CLICK.value(), SoundSource.PLAYERS, 1.0F, 0.8F);
+            player.displayClientMessage(
+                    Component.literal("Алчность: Все сохранённые предметы удалены из Каталога.")
+                            .withStyle(ChatFormatting.YELLOW),
+                    true
+            );
+            return;
+        }
+        if (mode >= 300 && mode < 399) {
+            int removeIdx = mode - 300;
+            if (data.removeObservedArtifact(removeIdx)) {
+                level.playSound(null, player.blockPosition(), SoundEvents.ITEM_BREAK, SoundSource.PLAYERS, 0.9F, 1.2F);
+                player.displayClientMessage(
+                        Component.literal("Алчность: Предмет #" + (removeIdx + 1) + " удалён из Каталога (осталось " + data.getObservedArtifacts().size() + "/20).")
+                                .withStyle(ChatFormatting.YELLOW),
+                        true
+                );
+            }
+            return;
+        }
+
         if (mode >= 100 || mode == 1) {
             List<CompoundTag> catalog = data.getObservedArtifacts();
             if (catalog.isEmpty()) {
@@ -256,7 +403,7 @@ public class SinsAbilityEngine {
                     data.addObservedArtifact(saved);
                 } else {
                     player.displayClientMessage(
-                            Component.literal("Каталог Алчности пуст. Наведите прицел на блок/моба в Режиме 1 или возьмите артефакт в руку!")
+                            Component.literal("Каталог Алчности пуст. Возьмите предмет в руку или наведите прицел на блок/врага в Режиме 1!")
                                     .withStyle(ChatFormatting.YELLOW),
                             true
                     );
@@ -272,14 +419,14 @@ public class SinsAbilityEngine {
                 return;
             }
 
-            float manaCost = 30.0F;
-            if (!data.consumeMana(manaCost)) {
+            if (!data.consumeManaWithOverdrive(30.0F, gameTime)) {
                 player.displayClientMessage(Component.literal("Недостаточно маны для репликации (требуется 30 ед.).").withStyle(ChatFormatting.RED), true);
                 return;
             }
 
+            int stackAmount = Math.max(1, reconstructed.getCount());
             ItemStack exactCopy = reconstructed.copy();
-            exactCopy.setCount(1);
+            exactCopy.setCount(stackAmount);
             CompatManager.onGreedItemReplicated(player, exactCopy);
 
             if (!player.getInventory().add(exactCopy)) {
@@ -288,14 +435,14 @@ public class SinsAbilityEngine {
             level.sendParticles(ParticleTypes.TOTEM_OF_UNDYING, player.getX(), player.getY() + 1.0D, player.getZ(), 28, 0.5D, 0.5D, 0.5D, 0.15D);
             level.playSound(null, player.blockPosition(), SoundEvents.AMETHYST_BLOCK_CHIME, SoundSource.PLAYERS, 1.8F, 1.2F);
             player.displayClientMessage(
-                    Component.literal("Алчность материализовала копию со всеми NBT/Apotheosis чарами: ").withStyle(ChatFormatting.GOLD, ChatFormatting.BOLD)
-                            .append(exactCopy.getHoverName()),
+                    Component.literal("Алчность материализовала: ").withStyle(ChatFormatting.GOLD, ChatFormatting.BOLD)
+                            .append(reconstructed.getHoverName())
+                            .append(Component.literal(" x" + stackAmount + " шт.!").withStyle(ChatFormatting.GREEN, ChatFormatting.BOLD)),
                     true
             );
             return;
         }
 
-        // Режим 0: Везение III (увеличивает шанс мифического лута Apotheosis!), Спешка II и магнит лута (24 блока)
         player.addEffect(new MobEffectInstance(MobEffects.LUCK, 1200, 2, false, true, true));
         player.addEffect(new MobEffectInstance(MobEffects.DIG_SPEED, 1200, 1, false, true, true));
         player.addEffect(new MobEffectInstance(MobEffects.HERO_OF_THE_VILLAGE, 1200, 1, false, true, true));
@@ -303,6 +450,48 @@ public class SinsAbilityEngine {
         for (ItemEntity itemEntity : level.getEntitiesOfClass(ItemEntity.class, player.getBoundingBox().inflate(24.0D))) {
             itemEntity.setNoPickUpDelay();
             itemEntity.teleportTo(player.getX(), player.getY() + 0.5D, player.getZ());
+        }
+
+        // Если в руке есть предмет (например, в стаке 13 штук) — игрок сразу получает 13 штук и сохраняет стак в Каталог!
+        ItemStack heldInHand = player.getMainHandItem();
+        if (!heldInHand.isEmpty()) {
+            int countInHand = heldInHand.getCount();
+            CompoundTag heldNbt = new CompoundTag();
+            heldInHand.save(heldNbt);
+            data.addObservedArtifact(heldNbt);
+
+            if (data.consumeManaWithOverdrive(15.0F, gameTime)) {
+                ItemStack duplicatedStack = heldInHand.copy();
+                duplicatedStack.setCount(countInHand);
+                CompatManager.onGreedItemReplicated(player, duplicatedStack);
+
+                if (!player.getInventory().add(duplicatedStack)) {
+                    player.drop(duplicatedStack, false);
+                }
+                level.sendParticles(ParticleTypes.TOTEM_OF_UNDYING, player.getX(), player.getY() + 1.0D, player.getZ(), 25, 0.5D, 0.5D, 0.5D, 0.12D);
+                level.playSound(null, player.blockPosition(), SoundEvents.AMETHYST_BLOCK_CHIME, SoundSource.PLAYERS, 1.8F, 1.3F);
+                player.displayClientMessage(
+                        Component.literal("Алчность: Скопирован стак в руке «")
+                                .append(heldInHand.getHoverName())
+                                .append(Component.literal("» — получено +" + countInHand + " шт. (и сохранено в Каталог)!"))
+                                .withStyle(ChatFormatting.GOLD, ChatFormatting.BOLD),
+                        true
+                );
+                ModAttachmentTypes.save(player, data);
+                ModNetwork.syncToPlayer(player, data);
+                return;
+            } else {
+                player.displayClientMessage(
+                        Component.literal("Стак «")
+                                .append(heldInHand.getHoverName())
+                                .append(Component.literal(" x" + countInHand + "» сохранён в Каталог Алчности (для выдачи нужно 15 маны)."))
+                                .withStyle(ChatFormatting.YELLOW),
+                        true
+                );
+                ModAttachmentTypes.save(player, data);
+                ModNetwork.syncToPlayer(player, data);
+                return;
+            }
         }
 
         scanEquipmentByRaycast(player, data, level, true);
@@ -423,9 +612,9 @@ public class SinsAbilityEngine {
     }
 
     /**
-     * 3. ПОХОТЬ (LUST) — ПРИРУЧЕНИЕ КАК ВЕРНОЙ СОБАКИ
+     * 3. ПОХОТЬ (LUST) — ЭВОЛЮЦИЯ: КРОВАВЫЙ КОНТРАКТ (+300% HP, +150% УРОНА) И ИЛЛЮЗИЯ КОШМАРА НА БОССОВ (+45% УРОНА)
      */
-    public static void executeLust(ServerPlayer player, PlayerSinsData data, ServerLevel level) {
+    public static void executeLust(ServerPlayer player, PlayerSinsData data, ServerLevel level, long gameTime) {
         LivingEntity primaryTarget = null;
         if (data.getLustTargetUuid() != null) {
             Entity entity = level.getEntity(data.getLustTargetUuid());
@@ -455,49 +644,75 @@ public class SinsAbilityEngine {
             return;
         }
 
-        if (!data.consumeMana(25.0F)) {
+        if (!data.consumeManaWithOverdrive(25.0F, gameTime)) {
             player.displayClientMessage(Component.literal("Недостаточно маны (требуется 25).").withStyle(ChatFormatting.RED), true);
             return;
         }
 
         final LivingEntity centerTarget = primaryTarget;
-        applyLustControl(player, centerTarget, level);
+        applyLustControl(player, centerTarget, level, gameTime);
         int extraCount = 0;
         for (Mob extraMob : level.getEntitiesOfClass(Mob.class, centerTarget.getBoundingBox().inflate(8.0D), e -> e != centerTarget && e.isAlive())) {
-            applyLustControl(player, extraMob, level);
+            applyLustControl(player, extraMob, level, gameTime);
             extraCount++;
             if (extraCount >= 5) break;
         }
         level.playSound(null, player.blockPosition(), SoundEvents.ENCHANTMENT_TABLE_USE, SoundSource.PLAYERS, 1.5F, 1.2F);
     }
 
-    public static void applyLustControl(ServerPlayer caster, LivingEntity target, ServerLevel level) {
-        if (target instanceof Mob) {
-            Mob mob = (Mob) target;
+    public static void applyLustControl(ServerPlayer caster, LivingEntity target, ServerLevel level, long gameTime) {
+        if (target instanceof Mob mob) {
+            boolean isBoss = !mob.canChangeDimensions() || mob.getMaxHealth() >= 300.0F;
+
+            if (isBoss) {
+                mob.getPersistentData().putLong("sds_lust_nightmare_until", gameTime + 240L);
+                mob.addEffect(new MobEffectInstance(MobEffects.GLOWING, 240, 0, false, true));
+                mob.addEffect(new MobEffectInstance(MobEffects.WEAKNESS, 240, 1, false, true));
+
+                List<Mob> otherMobs = level.getEntitiesOfClass(Mob.class, mob.getBoundingBox().inflate(24.0D), e -> e != mob && e.isAlive());
+                if (!otherMobs.isEmpty()) {
+                    mob.setTarget(otherMobs.get(0));
+                } else {
+                    mob.setTarget(null);
+                }
+
+                level.sendParticles(ParticleTypes.WITCH, mob.getX(), mob.getEyeY(), mob.getZ(), 35, 0.8D, 0.8D, 0.8D, 0.1D);
+                caster.displayClientMessage(
+                        Component.literal("Похоть [Иллюзия Кошмара]: Босс «" + mob.getName().getString() + "» дезориентирован и получает +45% входящего урона (12 сек)!")
+                                .withStyle(ChatFormatting.LIGHT_PURPLE, ChatFormatting.BOLD),
+                        true
+                );
+                return;
+            }
+
             mob.setTarget(null);
             mob.setPersistenceRequired();
 
-            if (mob instanceof TamableAnimal) {
-                TamableAnimal tamable = (TamableAnimal) mob;
+            if (mob instanceof TamableAnimal tamable) {
                 tamable.tame(caster);
                 tamable.setOrderedToSit(false);
                 level.broadcastEntityEvent(tamable, (byte) 7);
             }
 
-            mob.setHealth(mob.getMaxHealth());
-            mob.addEffect(new MobEffectInstance(MobEffects.DAMAGE_BOOST, 24000, 1, false, true));
-            mob.addEffect(new MobEffectInstance(MobEffects.MOVEMENT_SPEED, 24000, 1, false, true));
-            mob.addEffect(new MobEffectInstance(MobEffects.REGENERATION, 24000, 1, false, true));
-            mob.addEffect(new MobEffectInstance(MobEffects.DAMAGE_RESISTANCE, 24000, 1, false, true));
-
-            String baseName = mob.getType().getDescription().getString();
-            mob.setCustomName(Component.literal("❤ Питомец " + caster.getName().getString() + " [" + baseName + "]").withStyle(ChatFormatting.LIGHT_PURPLE));
-            mob.setCustomNameVisible(true);
+            AttributeInstance maxHpAttr = mob.getAttribute(Attributes.MAX_HEALTH);
+            if (maxHpAttr != null && maxHpAttr.getModifier(LUST_THRALL_HEALTH_UUID) == null) {
+                maxHpAttr.addTransientModifier(new AttributeModifier(LUST_THRALL_HEALTH_UUID, "Lust Blood Contract HP", 3.0D, AttributeModifier.Operation.MULTIPLY_TOTAL));
+            }
 
             AttributeInstance atk = mob.getAttribute(Attributes.ATTACK_DAMAGE);
             if (atk != null && atk.getModifier(LUST_THRALL_DAMAGE_UUID) == null) {
-                atk.addTransientModifier(new AttributeModifier(LUST_THRALL_DAMAGE_UUID, "Lust Thrall Damage", 0.85D, AttributeModifier.Operation.MULTIPLY_TOTAL));
+                atk.addTransientModifier(new AttributeModifier(LUST_THRALL_DAMAGE_UUID, "Lust Blood Contract Damage", 1.5D, AttributeModifier.Operation.MULTIPLY_TOTAL));
             }
+
+            mob.setHealth(mob.getMaxHealth());
+            mob.addEffect(new MobEffectInstance(MobEffects.DAMAGE_BOOST, 24000, 2, false, true));
+            mob.addEffect(new MobEffectInstance(MobEffects.MOVEMENT_SPEED, 24000, 1, false, true));
+            mob.addEffect(new MobEffectInstance(MobEffects.REGENERATION, 24000, 2, false, true));
+            mob.addEffect(new MobEffectInstance(MobEffects.DAMAGE_RESISTANCE, 24000, 1, false, true));
+
+            String baseName = mob.getType().getDescription().getString();
+            mob.setCustomName(Component.literal("❤ Страж Контракта " + caster.getName().getString() + " [" + baseName + "]").withStyle(ChatFormatting.LIGHT_PURPLE));
+            mob.setCustomNameVisible(true);
 
             mob.getPersistentData().putUUID("sds_lust_master", caster.getUUID());
             mob.targetSelector.removeAllGoals(goal -> true);
@@ -523,13 +738,12 @@ public class SinsAbilityEngine {
             level.sendParticles(ParticleTypes.HEART, mob.getX(), mob.getEyeY() + 0.4D, mob.getZ(), 18, 0.5D, 0.5D, 0.5D, 0.1D);
             level.playSound(null, mob.blockPosition(), SoundEvents.WOLF_PANT, SoundSource.PLAYERS, 1.2F, 1.0F);
             caster.displayClientMessage(
-                    Component.literal("Похоть: " + baseName + " приручён как верный пёс! Следует за вами, телепортируется и защищает хозяина!")
+                    Component.literal("Похоть [Кровавый Контракт]: " + baseName + " получил +300% HP и +150% урона и служит вам!")
                             .withStyle(ChatFormatting.LIGHT_PURPLE, ChatFormatting.BOLD),
                     true
             );
 
-        } else if (target instanceof ServerPlayer) {
-            ServerPlayer victimPlayer = (ServerPlayer) target;
+        } else if (target instanceof ServerPlayer victimPlayer) {
             victimPlayer.addEffect(new MobEffectInstance(MobEffects.BLINDNESS, 160, 0, false, true, true));
             victimPlayer.addEffect(new MobEffectInstance(MobEffects.MOVEMENT_SLOWDOWN, 160, 3, false, true, true));
             victimPlayer.addEffect(new MobEffectInstance(MobEffects.WEAKNESS, 160, 2, false, true, true));
@@ -550,7 +764,7 @@ public class SinsAbilityEngine {
     }
 
     /**
-     * 4. ЗАВИСТЬ (ENVY) — КРАЖА СПОСОБНОСТЕЙ ИЗ МОДОВ CISCO'S RPG [DRAGONFYRE]
+     * 4. ЗАВИСТЬ (ENVY) — КРАЖА СПОСОБНОСТЕЙ + ПРОБИТИЕ ЗАЩИТЫ БОССОВ
      */
     private static void executeEnvy(ServerPlayer player, PlayerSinsData data, ServerLevel level, long gameTime, int mode) {
         if (mode >= 200) {
@@ -572,23 +786,22 @@ public class SinsAbilityEngine {
 
         EntityHitResult hit = raycastEntity(player, 24.0D);
 
-        if (mode == 0 && hit != null && hit.getEntity() instanceof LivingEntity) {
-            LivingEntity target = (LivingEntity) hit.getEntity();
-            if (!data.consumeMana(20.0F)) {
+        if (mode == 0 && hit != null && hit.getEntity() instanceof LivingEntity target) {
+            if (!data.consumeManaWithOverdrive(20.0F, gameTime)) {
                 player.displayClientMessage(Component.literal("Недостаточно маны для кражи способности (20 ед.).").withStyle(ChatFormatting.RED), true);
                 return;
             }
 
-            float drainedHp = Math.min(180.0F, Math.max(10.0F, target.getHealth() * 0.20F));
-            target.hurt(level.damageSources().magic(), drainedHp);
-            player.heal(Math.min(20.0F, drainedHp * 0.5F));
+            float drainedHp = Math.min(220.0F, Math.max(15.0F, target.getHealth() * 0.20F));
+            CompatManager.dealMultiPhaseDamage(player, target, drainedHp, 3);
+            player.heal(Math.min(25.0F, drainedHp * 0.5F));
             target.addEffect(new MobEffectInstance(MobEffects.WEAKNESS, 400, 1, false, true));
             target.addEffect(new MobEffectInstance(MobEffects.MOVEMENT_SLOWDOWN, 400, 1, false, true));
 
             String moddedSkill = CompatManager.tryStealModdedAbility(player, target, data);
             if (!moddedSkill.isEmpty()) {
                 player.displayClientMessage(
-                        Component.literal("Зависть [Dragonfyre]: Похищена способность «" + moddedSkill + "»! (В арсенале: " + data.getStolenAbilities().size() + ")")
+                        Component.literal("Зависть [Dragonfyre]: Похищена способность «" + moddedSkill + "» + подавлены трейты L2Hostility!")
                                 .withStyle(ChatFormatting.LIGHT_PURPLE, ChatFormatting.BOLD),
                         true
                 );
@@ -608,8 +821,7 @@ public class SinsAbilityEngine {
                 player.getPersistentData().putBoolean("sds_explosion_immune", true);
                 player.displayClientMessage(Component.literal("Зависть: Крипер поглощён! Получен иммунитет к взрывам + Катаклизм-взрыв!").withStyle(ChatFormatting.GREEN, ChatFormatting.BOLD), true);
 
-            } else if (target instanceof ServerPlayer) {
-                ServerPlayer victim = (ServerPlayer) target;
+            } else if (target instanceof ServerPlayer victim) {
                 PlayerSinsData victimData = ModAttachmentTypes.get(victim);
                 float stolenMana = victimData.getCurrentMana() * 0.5F;
                 victimData.setCurrentMana(victimData.getCurrentMana() - stolenMana);
@@ -660,7 +872,7 @@ public class SinsAbilityEngine {
 
         switch (stolen) {
             case "enderman_blink": {
-                if (!data.consumeMana(12.0F)) return;
+                if (!data.consumeManaWithOverdrive(12.0F, gameTime)) return;
                 Vec3 look = player.getLookAngle();
                 Vec3 dest = player.position().add(look.scale(22.0D));
                 player.teleportTo(dest.x, dest.y + 0.5D, dest.z);
@@ -669,33 +881,33 @@ public class SinsAbilityEngine {
                 level.playSound(null, player.blockPosition(), SoundEvents.ENDERMAN_TELEPORT, SoundSource.PLAYERS, 1.5F, 1.0F);
                 for (LivingEntity nearby : level.getEntitiesOfClass(LivingEntity.class, player.getBoundingBox().inflate(4.0D), e -> e != player)) {
                     float dmg = CompatManager.calculateDragonfyreDamage(player, nearby, 28.0F, 0.04F, mult);
-                    nearby.hurt(level.damageSources().magic(), dmg);
+                    CompatManager.dealMultiPhaseDamage(player, nearby, dmg, 3);
                 }
                 break;
             }
             case "warden_sonic_boom": {
-                if (!data.consumeMana(25.0F)) return;
+                if (!data.consumeManaWithOverdrive(25.0F, gameTime)) return;
                 Vec3 start = player.getEyePosition();
                 Vec3 dir = player.getLookAngle().normalize();
-                level.playSound(null, player.blockPosition(), SoundEvents.WARDEN_SONIC_BOOM, SoundSource.PLAYERS, 2.5F, 1.0F);
+                level.playSound(null, player.blockPosition(), SoundEvents.WARDEN_SONIC_BOOM.value(), SoundSource.PLAYERS, 2.5F, 1.0F);
                 for (int i = 1; i <= 24; i++) {
                     Vec3 point = start.add(dir.scale(i));
                     level.sendParticles(ParticleTypes.SONIC_BOOM, point.x, point.y, point.z, 1, 0.0D, 0.0D, 0.0D, 0.0D);
                     for (LivingEntity victim : level.getEntitiesOfClass(LivingEntity.class, new AABB(point, point).inflate(2.4D), e -> e != player)) {
                         float dmg = CompatManager.calculateDragonfyreDamage(player, victim, 55.0F, 0.08F, mult);
-                        victim.hurt(level.damageSources().sonicBoom(player), dmg);
+                        CompatManager.dealMultiPhaseDamage(player, victim, dmg, 5);
                         victim.knockback(2.5D, -dir.x, -dir.z);
                     }
                 }
                 break;
             }
             case "creeper_blast_guard": {
-                if (!data.consumeMana(20.0F)) return;
+                if (!data.consumeManaWithOverdrive(20.0F, gameTime)) return;
                 level.sendParticles(ParticleTypes.EXPLOSION_EMITTER, player.getX(), player.getY() + 1.0D, player.getZ(), 3, 1.0D, 0.5D, 1.0D, 0.0D);
                 level.playSound(null, player.blockPosition(), SoundEvents.GENERIC_EXPLODE, SoundSource.PLAYERS, 2.0F, 0.7F);
                 for (LivingEntity victim : level.getEntitiesOfClass(LivingEntity.class, player.getBoundingBox().inflate(10.0D), e -> e != player && e.isAlive())) {
                     float dmg = CompatManager.calculateDragonfyreDamage(player, victim, 65.0F, 0.08F, mult);
-                    victim.hurt(level.damageSources().explosion(player, player), dmg);
+                    CompatManager.dealMultiPhaseDamage(player, victim, dmg, 4);
                     Vec3 push = victim.position().subtract(player.position()).normalize().scale(2.0D);
                     victim.setDeltaMovement(push.x, 0.9D, push.z);
                 }
@@ -734,7 +946,7 @@ public class SinsAbilityEngine {
             victim.hurtMarked = true;
 
             float drainDmg = CompatManager.calculateDragonfyreDamage(player, victim, 28.0F, 0.05F, mult);
-            victim.hurt(level.damageSources().magic(), drainDmg);
+            CompatManager.dealMultiPhaseDamage(player, victim, drainDmg, 3);
             devouredCount++;
         }
 
@@ -756,7 +968,7 @@ public class SinsAbilityEngine {
     }
 
     /**
-     * 6. ГНЕВ (WRATH) — КАТАКЛИЗМ БЕРСЕРКА DRAGONFYRE
+     * 6. ГНЕВ (WRATH) — КАТАКЛИЗМ БЕРСЕРКА С ПРОБИТИЕМ DAMAGE CAP БОССОВ
      */
     private static void executeWrathShockwave(ServerPlayer player, PlayerSinsData data, ServerLevel level, long gameTime) {
         float boostedStacks = Math.min(100.0F, data.getWrathStacks() + 35.0F);
@@ -779,9 +991,12 @@ public class SinsAbilityEngine {
                     && player.getUUID().equals(enemy.getPersistentData().getUUID("sds_lust_master"))) {
                 continue;
             }
-            enemy.setSecondsOnFire(8);
+            enemy.setSecondsOnFire(10);
+            enemy.getPersistentData().putLong("sds_hellblaze_until", gameTime + 200L);
+            enemy.getPersistentData().putFloat("sds_locked_hp", enemy.getHealth());
+
             float dmg = CompatManager.calculateDragonfyreDamage(player, enemy, 60.0F, 0.08F, mult);
-            enemy.hurt(level.damageSources().playerAttack(player), dmg);
+            CompatManager.dealMultiPhaseDamage(player, enemy, dmg, 5);
             Vec3 push = enemy.position().subtract(player.position()).normalize().scale(1.8D);
             enemy.setDeltaMovement(push.x, 0.85D, push.z);
             hitCount++;
@@ -789,7 +1004,7 @@ public class SinsAbilityEngine {
 
         player.addEffect(new MobEffectInstance(MobEffects.DAMAGE_RESISTANCE, 300, 2, false, true, true));
         player.displayClientMessage(
-                Component.literal("КАТАКЛИЗМ ГНЕВА (" + (int) boostedStacks + "%): Сокрушено врагов: " + hitCount + " (Множитель x" + String.format("%.1f", mult) + ")!")
+                Component.literal("КАТАКЛИЗМ ГНЕВА (" + (int) boostedStacks + "%): Сокрушено врагов: " + hitCount + " (Каскадный пробой Damage Cap x" + String.format("%.1f", mult) + ")!")
                         .withStyle(ChatFormatting.DARK_RED, ChatFormatting.BOLD),
                 true
         );
@@ -843,12 +1058,13 @@ public class SinsAbilityEngine {
         int tiers = (int) (data.getWrathStacks() / 10.0F);
         boolean berserk = gameTime < data.getWrathBerserkUntil();
         boolean slothAwakened = gameTime >= data.getSlothLockedUntil() && gameTime < data.getSlothBuffUntil();
+        double overdriveMult = data.isSinOverdriveActive(gameTime) ? 1.5D : 1.0D;
 
-        double attackPct = tiers * 0.35D + (data.getDragonfyreSoulRank() * 0.05D);
+        double attackPct = (tiers * 0.35D + (data.getDragonfyreSoulRank() * 0.05D)) * overdriveMult;
         if (berserk) {
-            attackPct = Math.max(attackPct, 3.0D);
+            attackPct = Math.max(attackPct, 3.0D * overdriveMult);
         }
-        double speedPct = tiers * 0.12D;
+        double speedPct = (tiers * 0.12D) * overdriveMult;
 
         AttributeInstance attackAttr = player.getAttribute(Attributes.ATTACK_DAMAGE);
         if (attackAttr != null) {

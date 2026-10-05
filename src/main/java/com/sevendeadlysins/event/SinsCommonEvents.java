@@ -96,36 +96,54 @@ public class SinsCommonEvents {
 
         long gameTime = level.getGameTime();
 
-        // 1. Остановка Времени Гордыни (Закон 0): обновляется вокруг игрока без глобального LivingTickEvent
+        // 1. Остановка Времени Гордыни (Способность 1 — 20 секунд): все кроме игрока стоят на месте и НЕ МОГУТ РЕГЕНЕРИРОВАТЬ!
         if (data.getActivePrideLaw() == 0) {
             if (gameTime >= data.getPrideActiveUntil()) {
                 data.setActivePrideLaw(-1);
-                SinsAbilityEngine.unfreezeTimeInArea(player, level, 72.0D);
+                SinsAbilityEngine.unfreezeTimeInArea(player, level, 80.0D);
                 player.displayClientMessage(
-                        Component.literal("Гордыня: Действие Остановки Времени завершено.")
+                        Component.literal("Гордыня: Действие 20-секундной Остановки Времени завершено.")
                                 .withStyle(ChatFormatting.YELLOW),
                         true
                 );
-            } else if (gameTime % 2L == 0L) {
-                AABB box = player.getBoundingBox().inflate(56.0D);
-                for (Mob mob : level.getEntitiesOfClass(Mob.class, box)) {
-                    if (mob.getPersistentData().hasUUID("sds_lust_master")
-                            && player.getUUID().equals(mob.getPersistentData().getUUID("sds_lust_master"))) {
+            } else {
+                AABB box = player.getBoundingBox().inflate(64.0D);
+                for (LivingEntity entity : level.getEntitiesOfClass(LivingEntity.class, box, e -> e != player && e.isAlive())) {
+                    if (entity.getPersistentData().hasUUID("sds_lust_master")
+                            && player.getUUID().equals(entity.getPersistentData().getUUID("sds_lust_master"))) {
                         continue;
                     }
-                    if (!mob.getPersistentData().getBoolean("sds_time_stopped")) {
-                        mob.setNoAi(true);
-                        mob.setNoGravity(true);
-                        mob.getPersistentData().putBoolean("sds_time_stopped", true);
-                        mob.getPersistentData().putDouble("sds_freeze_x", mob.getX());
-                        mob.getPersistentData().putDouble("sds_freeze_y", mob.getY());
-                        mob.getPersistentData().putDouble("sds_freeze_z", mob.getZ());
+                    if (!entity.getPersistentData().getBoolean("sds_time_stopped")) {
+                        if (entity instanceof Mob mob) {
+                            mob.setNoAi(true);
+                            mob.setTarget(null);
+                            mob.getNavigation().stop();
+                        }
+                        entity.setNoGravity(true);
+                        entity.getPersistentData().putBoolean("sds_time_stopped", true);
+                        entity.getPersistentData().putDouble("sds_freeze_x", entity.getX());
+                        entity.getPersistentData().putDouble("sds_freeze_y", entity.getY());
+                        entity.getPersistentData().putDouble("sds_freeze_z", entity.getZ());
+                        entity.getPersistentData().putFloat("sds_locked_hp", entity.getHealth());
                     }
-                    mob.setDeltaMovement(Vec3.ZERO);
-                    mob.setPos(
-                            mob.getPersistentData().getDouble("sds_freeze_x"),
-                            mob.getPersistentData().getDouble("sds_freeze_y"),
-                            mob.getPersistentData().getDouble("sds_freeze_z")
+
+                    // Блокируем регенерацию: если HP цели попыталось вырасти выше sds_locked_hp, возвращаем назад,
+                    // а если игрок нанёс урон — обновляем потолок sds_locked_hp вниз!
+                    entity.removeEffect(net.minecraft.world.effect.MobEffects.REGENERATION);
+                    float lockedHp = entity.getPersistentData().contains("sds_locked_hp")
+                            ? entity.getPersistentData().getFloat("sds_locked_hp")
+                            : entity.getHealth();
+                    if (entity.getHealth() > lockedHp) {
+                        entity.setHealth(lockedHp);
+                    } else if (entity.getHealth() < lockedHp) {
+                        entity.getPersistentData().putFloat("sds_locked_hp", entity.getHealth());
+                    }
+
+                    entity.setDeltaMovement(Vec3.ZERO);
+                    entity.setPos(
+                            entity.getPersistentData().getDouble("sds_freeze_x"),
+                            entity.getPersistentData().getDouble("sds_freeze_y"),
+                            entity.getPersistentData().getDouble("sds_freeze_z")
                     );
                 }
                 for (Projectile proj : level.getEntitiesOfClass(Projectile.class, box)) {
@@ -146,42 +164,24 @@ public class SinsCommonEvents {
             }
         }
 
-        // 2. Гравитационный Коллапс Гордыни (Закон 1): проверка приземления целей
-        if (data.getActivePrideLaw() == 1 && gameTime < data.getPrideActiveUntil() && gameTime % 5L == 0L) {
-            for (LivingEntity target : level.getEntitiesOfClass(LivingEntity.class, player.getBoundingBox().inflate(52.0D), e -> e != player && e.isAlive())) {
-                if (target.getPersistentData().contains("sds_gravity_slam_tick")) {
-                    long slamTick = target.getPersistentData().getLong("sds_gravity_slam_tick");
-                    if (gameTime >= slamTick) {
-                        target.getPersistentData().remove("sds_gravity_slam_tick");
-                        target.setDeltaMovement(0.0D, -4.5D, 0.0D);
-                        target.hurtMarked = true;
-
-                        float slamDmg = CompatManager.calculateDragonfyreDamage(player, target, 85.0F, 0.12F, data.getDamageMultiplier(gameTime));
-                        target.hurt(level.damageSources().flyIntoWall(), slamDmg);
-                        level.sendParticles(ParticleTypes.EXPLOSION_EMITTER, target.getX(), target.getY(), target.getZ(), 1, 0.0D, 0.0D, 0.0D, 0.0D);
-                        level.playSound(null, target.blockPosition(), SoundEvents.ANVIL_LAND, SoundSource.HOSTILE, 1.6F, 0.6F);
-
-                        LightningBolt bolt = EntityType.LIGHTNING_BOLT.create(level);
-                        if (bolt != null) {
-                            bolt.moveTo(target.position());
-                            bolt.setVisualOnly(true);
-                            level.addFreshEntity(bolt);
-                        }
+        // 2. Блокировка регенерации от Очищения Гордыни (Способность 2) и Адского Пламени Первородного Греха (Hellblaze)
+        if (gameTime % 5L == 0L) {
+            for (LivingEntity target : level.getEntitiesOfClass(LivingEntity.class, player.getBoundingBox().inflate(36.0D), e -> e != player && e.isAlive())) {
+                long noRegenUntil = Math.max(
+                        target.getPersistentData().getLong("sds_no_regen_until"),
+                        target.getPersistentData().getLong("sds_hellblaze_until")
+                );
+                if (gameTime < noRegenUntil) {
+                    target.removeEffect(net.minecraft.world.effect.MobEffects.REGENERATION);
+                    float lockedHp = target.getPersistentData().contains("sds_locked_hp")
+                            ? target.getPersistentData().getFloat("sds_locked_hp")
+                            : target.getHealth();
+                    if (target.getHealth() > lockedHp) {
+                        target.setHealth(lockedHp);
+                    } else if (target.getHealth() < lockedHp) {
+                        target.getPersistentData().putFloat("sds_locked_hp", target.getHealth());
                     }
                 }
-            }
-        }
-
-        // 3. Солнечная Аура Гордыни (Закон 2 — Солнечный Зенит): каждые 10 тиков выжигает врагов
-        if (data.getActivePrideLaw() == 2 && gameTime < data.getPrideActiveUntil() && gameTime % 10L == 0L) {
-            level.sendParticles(ParticleTypes.FLAME, player.getX(), player.getY() + 1.0D, player.getZ(), 10, 3.0D, 0.5D, 3.0D, 0.02D);
-            for (LivingEntity enemy : level.getEntitiesOfClass(LivingEntity.class, player.getBoundingBox().inflate(10.0D), e -> e != player && e.isAlive() && e instanceof Enemy)) {
-                if (enemy.getPersistentData().hasUUID("sds_lust_master")
-                        && player.getUUID().equals(enemy.getPersistentData().getUUID("sds_lust_master"))) {
-                    continue;
-                }
-                enemy.setSecondsOnFire(5);
-                enemy.hurt(level.damageSources().onFire(), 14.0F + enemy.getMaxHealth() * 0.02F);
             }
         }
 
@@ -310,13 +310,22 @@ public class SinsCommonEvents {
 
             if ("creeper_blast_guard".equals(data.getStolenAbilityId()) && event.getSource().is(DamageTypeTags.IS_EXPLOSION)) {
                 event.setCanceled(true);
+                return;
+            }
+
+            // Защита от трейта Reflect (Отражение урона L2Hostility), если цель подавлена Грехами
+            if (attacker instanceof LivingEntity livingAttacker
+                    && livingAttacker.getPersistentData().getLong("sds_l2_suppressed_until") > gameTime
+                    && event.getSource().is(DamageTypeTags.BYPASSES_ARMOR)) {
+                event.setCanceled(true);
             }
         }
     }
 
     /**
-     * ГНЕВ (WRATH) и ЛЕНЬ (SLOTH): Накопление стаков Гнева, 5x множитель Пробуждения Лени,
-     * взрывные удары Берсерка и вампиризм в боях Cisco's RPG [Dragonfyre].
+     * ГНЕВ (WRATH), ЛЕНЬ (SLOTH) И ПЕРВОРОДНЫЙ ГРЕХ (OVERDRIVE):
+     * Накопление стаков Гнева, 5x множитель Пробуждения Лени, наложение черного Адского Пламени (Hellblaze),
+     * блокирующего регенерацию боссов, и подавление трейтов L2Hostility.
      */
     @SubscribeEvent
     public static void onLivingHurt(LivingHurtEvent event) {
@@ -337,7 +346,7 @@ public class SinsCommonEvents {
                     data.setWrathBerserkUntil(gameTime + 400L);
                     player.level().playSound(null, player.blockPosition(), SoundEvents.ENDER_DRAGON_GROWL, SoundSource.PLAYERS, 1.5F, 0.8F);
                     player.displayClientMessage(
-                            Component.literal("ГНЕВ 100%: РЕЖИМ БЕРСЕРКА DRAGONFYRE НА 20 СЕКУНД! (x3 Урон + Пробой Брони + Вампиризм)")
+                            Component.literal("ГНЕВ 100%: РЕЖИМ БЕРСЕРКА DRAGONFYRE НА 20 СЕКУНД! (Нажмите [Shift + V] для Метки Демона!)")
                                     .withStyle(ChatFormatting.DARK_RED, ChatFormatting.BOLD),
                             true
                     );
@@ -358,15 +367,27 @@ public class SinsCommonEvents {
             data.setLustTargetUuid(victim.getUUID());
 
             long gameTime = attacker.level().getGameTime();
+            CompatManager.suppressL2HostilityTraits(victim);
+
             float nextStacks = Math.min(100.0F, data.getWrathStacks() + 8.0F);
             data.setWrathStacks(nextStacks);
             if (nextStacks >= 100.0F && gameTime >= data.getWrathBerserkUntil()) {
                 data.setWrathBerserkUntil(gameTime + 400L);
                 attacker.displayClientMessage(
-                        Component.literal("ГНЕВ 100%: РЕЖИМ БЕРСЕРКА АКТИВИРОВАН!")
+                        Component.literal("ГНЕВ 100%: РЕЖИМ БЕРСЕРКА АКТИВИРОВАН! (Доступен [Shift + V] — Первородный Грех!)")
                                 .withStyle(ChatFormatting.DARK_RED, ChatFormatting.BOLD),
                         true
                 );
+            }
+
+            // Если активна Метка Демона (Первородный Грех / Overdrive) — накладываем Адское Пламя (Hellblaze),
+            // которое блокирует регенерацию босса и увеличивает урон в 1.5 раза!
+            if (data.isSinOverdriveActive(gameTime)) {
+                event.setAmount(event.getAmount() * 1.5F);
+                victim.setSecondsOnFire(12);
+                victim.getPersistentData().putLong("sds_hellblaze_until", gameTime + 300L);
+                victim.getPersistentData().putFloat("sds_locked_hp", Math.max(0.0F, victim.getHealth() - event.getAmount()));
+                attacker.serverLevel().sendParticles(ParticleTypes.SOUL_FIRE_FLAME, victim.getX(), victim.getY() + 1.0D, victim.getZ(), 8, 0.3D, 0.4D, 0.3D, 0.04D);
             }
 
             // Применяем 5x множитель Пробуждения Лени к ударам игрока
@@ -374,8 +395,8 @@ public class SinsCommonEvents {
                 event.setAmount(event.getAmount() * 2.5F);
             }
 
-            if (gameTime < data.getWrathBerserkUntil() || data.getActiveSinIndex() == 5) {
-                attacker.heal(Math.min(8.0F, event.getAmount() * 0.25F));
+            if (gameTime < data.getWrathBerserkUntil() || data.getActiveSinIndex() == 5 || data.isSinOverdriveActive(gameTime)) {
+                attacker.heal(Math.min(12.0F, event.getAmount() * 0.25F));
             }
 
             if (gameTime < data.getWrathBerserkUntil() && !victim.getPersistentData().getBoolean("sds_splash_guard")) {

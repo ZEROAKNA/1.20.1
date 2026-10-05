@@ -17,8 +17,11 @@ import java.util.List;
 
 /**
  * Меню Сокровищницы Алчности (GreedCatalogScreen) для Minecraft 1.20.1 (Forge 47.3.0).
- * Воссоздаёт предметы через ItemStack.of(CompoundTag), сохраняя все мифические аффиксы Apotheosis,
- * вставленные самоцветы, свитки заклинаний Iron's Spells и оружие Simply Swords.
+ *
+ * ОБНОВЛЕНИЯ ПО ЗАПРОСУ:
+ * - Если предмет был скопирован со стаком (например, 13 штук) — при нажатии «Создать» выдаётся ровно 13 штук!
+ * - Напротив каждого сохранённого предмета добавлена кнопка «[✕]» для мгновенного удаления предмета из Каталога,
+ *   а также кнопка «Очистить весь каталог» внизу экрана.
  */
 public class GreedCatalogScreen extends Screen {
     private final List<ItemStack> parsedItems = new ArrayList<>();
@@ -26,7 +29,7 @@ public class GreedCatalogScreen extends Screen {
     private final List<Integer> iconPositionsY = new ArrayList<>();
 
     public GreedCatalogScreen() {
-        super(Component.literal("✦ Каталог Алчности — Сокровищница Артефактов [Dragonfyre] ✦"));
+        super(Component.literal("✦ Каталог Алчности — Создание Полных Стаков и Управление ✦"));
     }
 
     @Override
@@ -46,7 +49,7 @@ public class GreedCatalogScreen extends Screen {
         PlayerSinsData data = ModAttachmentTypes.get(mc.player);
         List<CompoundTag> artifacts = data.getObservedArtifacts();
 
-        int startX = this.width / 2 - 170;
+        int startX = this.width / 2 - 178;
         int startY = 58;
 
         for (int i = 0; i < artifacts.size(); i++) {
@@ -54,39 +57,62 @@ public class GreedCatalogScreen extends Screen {
             ItemStack parsed = ItemStack.of(artifacts.get(i));
             this.parsedItems.add(parsed);
 
+            int stackCount = Math.max(1, parsed.getCount());
             String rawName = parsed.isEmpty() ? "Артефакт #" + (i + 1) : parsed.getHoverName().getString();
-            if (rawName.length() > 18) {
-                rawName = rawName.substring(0, 17) + "…";
+            if (rawName.length() > 13) {
+                rawName = rawName.substring(0, 12) + "…";
             }
 
             int col = i % 2;
             int row = i / 2;
-            int cellX = startX + col * 176;
+            int cellX = startX + col * 182;
             int cellY = startY + row * 24;
 
             this.iconPositionsX.add(cellX + 3);
             this.iconPositionsY.add(cellY + 2);
 
+            // Кнопка выдачи полного стака (например, x13 шт.)
             this.addRenderableWidget(Button.builder(
-                    Component.literal("Создать: " + rawName),
+                    Component.literal("Взять x" + stackCount + ": " + rawName),
                     btn -> {
                         ModNetwork.sendToServer(new CastSinPayload(1, 100 + slotIndex));
                         this.onClose();
                     }
-            ).bounds(cellX + 24, cellY, 144, 20).build());
+            ).bounds(cellX + 22, cellY, 128, 20).build());
+
+            // Кнопка удаления сохранённого предмета из Каталога Алчности
+            this.addRenderableWidget(Button.builder(
+                    Component.literal("§c✕"),
+                    btn -> {
+                        data.removeObservedArtifact(slotIndex);
+                        ModNetwork.sendToServer(new CastSinPayload(1, 300 + slotIndex));
+                        this.rebuildWidgets();
+                    }
+            ).bounds(cellX + 152, cellY, 22, 20).build());
+        }
+
+        if (!artifacts.isEmpty()) {
+            this.addRenderableWidget(Button.builder(
+                    Component.literal("§cОчистить весь каталог"),
+                    btn -> {
+                        data.clearObservedArtifacts();
+                        ModNetwork.sendToServer(new CastSinPayload(1, 399));
+                        this.rebuildWidgets();
+                    }
+            ).bounds(this.width / 2 - 166, this.height - 32, 156, 20).build());
         }
 
         this.addRenderableWidget(Button.builder(
-                Component.literal("Закрыть Сокровищницу [ESC]"),
+                Component.literal("Закрыть [ESC]"),
                 btn -> this.onClose()
-        ).bounds(this.width / 2 - 80, this.height - 32, 160, 20).build());
+        ).bounds(this.width / 2 + 10, this.height - 32, 156, 20).build());
     }
 
     @Override
     public void render(GuiGraphics guiGraphics, int mouseX, int mouseY, float partialTick) {
         guiGraphics.fill(0, 0, this.width, this.height, 0xB0070B12);
 
-        int panelW = 376;
+        int panelW = 384;
         int panelX = this.width / 2 - panelW / 2;
         int panelY = 14;
         int panelH = this.height - 28;
@@ -101,7 +127,7 @@ public class GreedCatalogScreen extends Screen {
         Minecraft mc = Minecraft.getInstance();
         if (mc.player != null) {
             PlayerSinsData data = ModAttachmentTypes.get(mc.player);
-            String subTitle = String.format("Стоимость репликации со всеми чарами Apotheosis: 30 Маны  |  Мана: %.0f / %.0f",
+            String subTitle = String.format("Выдаёт весь стак (напр. 13 шт.) за 30 Маны | [✕] — удалить предмет | Мана: %.0f / %.0f",
                     data.getCurrentMana(), data.getMaxMana());
             guiGraphics.drawCenteredString(this.font, subTitle, this.width / 2, 38, 0xFF38BDF8);
         }
@@ -117,7 +143,7 @@ public class GreedCatalogScreen extends Screen {
                 guiGraphics.renderItem(stack, ix, iy);
                 guiGraphics.renderItemDecorations(this.font, stack, ix, iy);
 
-                if (mouseX >= ix - 2 && mouseX <= ix + 166 && mouseY >= iy - 2 && mouseY <= iy + 18) {
+                if (mouseX >= ix - 2 && mouseX <= ix + 148 && mouseY >= iy - 2 && mouseY <= iy + 18) {
                     hoveredStack = stack;
                 }
             }

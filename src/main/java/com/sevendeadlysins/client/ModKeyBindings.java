@@ -102,7 +102,9 @@ public class ModKeyBindings {
             }
 
             while (CAST_SIN_KEY.consumeClick()) {
-                if (data.getActiveSinIndex() == 1 && data.getActiveSubMode() == 1 && !data.getObservedArtifacts().isEmpty()) {
+                if (mc.player.isShiftKeyDown()) {
+                    ModNetwork.sendToServer(new CastSinPayload(data.getActiveSinIndex(), -2));
+                } else if (data.getActiveSinIndex() == 1 && data.getActiveSubMode() == 1) {
                     mc.setScreen(new GreedCatalogScreen());
                 } else if (data.getActiveSinIndex() == 3 && data.getActiveSubMode() == 2) {
                     mc.setScreen(new EnvySelectionScreen());
