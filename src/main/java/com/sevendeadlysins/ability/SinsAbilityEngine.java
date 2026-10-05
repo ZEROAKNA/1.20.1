@@ -329,7 +329,7 @@ public class SinsAbilityEngine {
 
         level.sendParticles(ParticleTypes.SONIC_BOOM, target.getX(), target.getY() + 1.0D, target.getZ(), 3, 0.2D, 0.2D, 0.2D, 0.0D);
         level.sendParticles(ParticleTypes.SOUL_FIRE_FLAME, target.getX(), target.getY() + 1.0D, target.getZ(), 75, 0.9D, 1.2D, 0.9D, 0.12D);
-        level.playSound(null, target.blockPosition(), SoundEvents.WARDEN_SONIC_BOOM.value(), SoundSource.PLAYERS, 2.5F, 0.6F);
+        level.playSound(null, target.blockPosition(), SoundEvents.WARDEN_SONIC_BOOM, SoundSource.PLAYERS, 2.5F, 0.6F);
         level.playSound(null, target.blockPosition(), SoundEvents.WITHER_DEATH, SoundSource.PLAYERS, 1.8F, 0.7F);
 
         player.displayClientMessage(
@@ -889,7 +889,7 @@ public class SinsAbilityEngine {
                 if (!data.consumeManaWithOverdrive(25.0F, gameTime)) return;
                 Vec3 start = player.getEyePosition();
                 Vec3 dir = player.getLookAngle().normalize();
-                level.playSound(null, player.blockPosition(), SoundEvents.WARDEN_SONIC_BOOM.value(), SoundSource.PLAYERS, 2.5F, 1.0F);
+                level.playSound(null, player.blockPosition(), SoundEvents.WARDEN_SONIC_BOOM, SoundSource.PLAYERS, 2.5F, 1.0F);
                 for (int i = 1; i <= 24; i++) {
                     Vec3 point = start.add(dir.scale(i));
                     level.sendParticles(ParticleTypes.SONIC_BOOM, point.x, point.y, point.z, 1, 0.0D, 0.0D, 0.0D, 0.0D);
