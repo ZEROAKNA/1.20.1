@@ -1,0 +1,8 @@
+{
+  "name": "Remix Seven Deadly Sins — NeoForge 1.20.1 Mod Studio",
+  "description": "Полная кодовая база, Gradle-конфигурация и интерактивный симулятор мода Seven Deadly Sins для Minecraft 1.20.1 (Forge 47.3.0 / Java 17), оптимизированного под сборку Cisco's Fantasy Medieval RPG [Dragonfyre].",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
