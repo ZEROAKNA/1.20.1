@@ -200,6 +200,13 @@ export default function App() {
                 <code className="text-emerald-400 font-mono">Simply Swords</code> и{' '}
                 <code className="text-emerald-400 font-mono">L2Hostility</code>.
               </p>
+              <div className="p-3.5 rounded-lg bg-emerald-950/30 border border-emerald-500/30 text-xs text-emerald-200 flex items-start gap-2.5">
+                <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                <div>
+                  <span className="font-semibold text-emerald-300">Исправлена ошибка загрузки Forge 1.20.1 («не удалось загрузить правильную информацию о наборе ресурсов»):</span>{' '}
+                  В корень ресурсов добавлен и жестко зафиксирован <code className="text-amber-300 font-mono">src/main/resources/pack.mcmeta</code> с <code className="text-amber-300 font-mono">pack_format: 15</code> и объектом <code className="text-amber-300 font-mono">description.text</code>, удалён конфликтующий <code className="font-mono">neoforge.mods.toml</code>, в <code className="font-mono">mods.toml</code> выставлены универсальные диапазоны <code className="font-mono">[0,)</code> для 3C Beta, а вызовы <code className="font-mono">Holder.Reference&lt;SoundEvent&gt;</code> приведены к API 1.20.1.
+                </div>
+              </div>
             </div>
 
             {/* Mode Switcher Segmented Controls */}

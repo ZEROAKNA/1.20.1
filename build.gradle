@@ -55,33 +55,32 @@ repositories {
         name = "MinecraftForge"
         url = "https://maven.minecraftforge.net/"
     }
-    maven {
-        name = "CurseMaven (Cisco's RPG Mods)"
-        url = "https://cursemaven.com"
-        content {
-            includeGroup "curse.maven"
-        }
-    }
-    maven {
-        name = "Redspace Maven (Iron's Spells)"
-        url = "https://code.redspace.io/releases"
-    }
-    maven {
-        name = "Shadows_of_Fire Maven (Apotheosis / AttributesLib)"
-        url = "https://maven.shadowsoffire.dev/releases"
-    }
 }
 
 dependencies {
     minecraft "net.minecraftforge:forge:${project.minecraft_version}-${project.forge_version}"
-
-    // Мягкие зависимости (Soft Dependencies) для модпака Cisco's Fantasy Medieval RPG [Dragonfyre]
-    // определяются динамически в рантайме через ModList.get().isLoaded() и рефлексию/реестры Forge,
-    // поэтому сборка .jar не требует скачивания внешних модов в GitHub Actions!
 }
 
-tasks.withType(ProcessResources).configureEach {
+// Гарантированное создание валидного pack.mcmeta (pack_format: 15 для 1.20.1),
+// чтобы Forge никогда не выдавал ошибку "не удалось загрузить правильную информацию о наборе ресурсов"
+tasks.named('processResources', ProcessResources).configure {
     duplicatesStrategy = DuplicatesStrategy.INCLUDE
+    doFirst {
+        File resDir = file('src/main/resources')
+        if (!resDir.exists()) {
+            resDir.mkdirs()
+        }
+        File packMcmeta = new File(resDir, 'pack.mcmeta')
+        packMcmeta.setText('''{
+  "pack": {
+    "description": {
+      "text": "Seven Deadly Sins [Dragonfyre RPG] Resources"
+    },
+    "pack_format": 15
+  }
+}
+''', 'UTF-8')
+    }
 }
 
 tasks.withType(JavaCompile).configureEach {

@@ -168,7 +168,7 @@ public class RadialMenuScreen extends Screen {
             ModNetwork.sendToServer(new SelectSinPayload(sinIndex));
             Minecraft mc = Minecraft.getInstance();
             if (mc.player != null) {
-                mc.player.playSound(SoundEvents.UI_BUTTON_CLICK.get(), 0.7F, 1.2F);
+                mc.player.playSound(SoundEvents.UI_BUTTON_CLICK.value(), 0.7F, 1.2F);
             }
         }
         this.onClose();

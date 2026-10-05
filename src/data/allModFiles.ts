@@ -62,20 +62,20 @@ function populateCommonProjectResources(zip: JSZip) {
     zip.file('.github/workflows/build.yml', workflowFile.content);
   }
 
-  // Дублируем mods.toml также в neoforge.mods.toml для полной обратной совместимости с форками загрузчика 1.20.1
   const modsTomlFile = ALL_MOD_FILES.find((f) => f.id === 'mods-toml');
   if (modsTomlFile) {
     zip.file('src/main/resources/META-INF/mods.toml', modsTomlFile.content);
-    zip.file('src/main/resources/META-INF/neoforge.mods.toml', modsTomlFile.content);
   }
 
-  // 2. pack.mcmeta (pack_format: 15 строго для Minecraft 1.20.1)
+  // 2. pack.mcmeta (pack_format: 15 строго для Minecraft 1.20.1 Forge)
   zip.file(
     'src/main/resources/pack.mcmeta',
     JSON.stringify(
       {
         pack: {
-          description: "Seven Deadly Sins [Dragonfyre RPG Edition] Resources (Minecraft 1.20.1)",
+          description: {
+            text: 'Seven Deadly Sins [Dragonfyre RPG] Resources',
+          },
           pack_format: 15,
         },
       },

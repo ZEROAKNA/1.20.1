@@ -4,6 +4,7 @@ const buildGradle = fs.readFileSync('build.gradle', 'utf8');
 const gradleProperties = fs.readFileSync('gradle.properties', 'utf8');
 const settingsGradle = fs.readFileSync('settings.gradle', 'utf8');
 const modsToml = fs.readFileSync('src/main/resources/META-INF/mods.toml', 'utf8');
+const packMcmeta = fs.readFileSync('src/main/resources/pack.mcmeta', 'utf8');
 const workflowYml = fs.readFileSync('.github/workflows/build.yml', 'utf8');
 
 const mainModJava = fs.readFileSync('src/main/java/com/sevendeadlysins/SevenDeadlySinsMod.java', 'utf8');
@@ -41,7 +42,7 @@ export const FILES_SECTION_1_2: ModProjectFile[] = [
     path: 'build.gradle',
     filename: 'build.gradle',
     language: 'groovy',
-    description: 'Скрипт сборки ForgeGradle 6.0 под Minecraft 1.20.1 (Forge 47.3.0), Java 17 и официальные маппинги (оптимизирован под Cisco\\'s Fantasy Medieval RPG [Dragonfyre] и автосборку на GitHub).',
+    description: 'Скрипт сборки ForgeGradle 6.0 под Minecraft 1.20.1 (Forge 47.3.0), Java 17 и официальные маппинги (автоматически генерирует валидный pack.mcmeta с pack_format: 15 при сборке).',
     content: ${JSON.stringify(buildGradle)}
   },
   {
@@ -65,13 +66,23 @@ export const FILES_SECTION_1_2: ModProjectFile[] = [
     content: ${JSON.stringify(settingsGradle)}
   },
   {
+    id: 'pack-mcmeta',
+    sectionOrder: 1,
+    sectionTitle: '1. Конфигурационные файлы сборки 1.20.1 (Forge 47.3.0 / Java 17) и GitHub Actions CI/CD',
+    path: 'src/main/resources/pack.mcmeta',
+    filename: 'pack.mcmeta',
+    language: 'json',
+    description: 'КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ ОШИБКИ РЕСУРСОВ FORGE 1.20.1: Дескриптор ресурсов с pack_format: 15 и объектом description.text (устраняет ошибку «не удалось загрузить правильную информацию о наборе ресурсов»).',
+    content: ${JSON.stringify(packMcmeta)}
+  },
+  {
     id: 'mods-toml',
     sectionOrder: 1,
     sectionTitle: '1. Конфигурационные файлы сборки 1.20.1 (Forge 47.3.0 / Java 17) и GitHub Actions CI/CD',
     path: 'src/main/resources/META-INF/mods.toml',
     filename: 'mods.toml',
     language: 'toml',
-    description: 'Дескриптор мода META-INF/mods.toml для загрузчика Forge 1.20.1 с опциональными связями под моды Cisco\\'s RPG [Dragonfyre] (Apotheosis, Iron\\'s Spells, Ice and Fire, Cataclysm, Simply Swords, L2Hostility).',
+    description: 'Дескриптор мода META-INF/mods.toml для загрузчика Forge 1.20.1 с универсальными диапазонами [0,) для всех бета-версий модов Cisco\\'s RPG [Dragonfyre] 3C Beta.',
     content: ${JSON.stringify(modsToml)}
   },
   {
@@ -81,7 +92,7 @@ export const FILES_SECTION_1_2: ModProjectFile[] = [
     path: '.github/workflows/build.yml',
     filename: 'build.yml (GitHub Actions)',
     language: 'toml',
-    description: 'Автоматический пайплайн GitHub Actions: устанавливает JDK 17 (Temurin) и Gradle 8.8, компилирует и обфусцирует (reobfJar) готовый .jar под Minecraft 1.20.1.',
+    description: 'Автоматический пайплайн GitHub Actions: устанавливает JDK 17 (Temurin) и Gradle 8.8, принудительно проверяет pack.mcmeta (pack_format: 15) и компилирует готовый .jar под Minecraft 1.20.1.',
     content: ${JSON.stringify(workflowYml)}
   },
   {
@@ -329,4 +340,4 @@ fs.writeFileSync('src/data/filesSection1And2.ts', section1And2Ts, 'utf8');
 fs.writeFileSync('src/data/filesSection3.ts', section3Ts, 'utf8');
 fs.writeFileSync('src/data/filesSection4a.ts', section4aTs, 'utf8');
 fs.writeFileSync('src/data/filesSection4b.ts', section4bTs, 'utf8');
-console.log('Synced all 4 TS sections from 1.20.1 Java & Gradle files successfully.');
+console.log('Synced all 4 TS sections including pack.mcmeta successfully.');
